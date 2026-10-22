@@ -241,3 +241,25 @@ def test_fastapi_endpoints() -> None:
     assert r_bench.status_code == 200
     assert r_bench.json()["summary"]["completeness_rate"] == 1.0
     assert r_bench.json()["summary"]["cheating_acceptance_rate"] == 0.0
+
+
+def test_range_proof_rejects_modular_wraparound() -> None:
+    # With bit_length >= 253 a prover can write -5 mod q as genuine 0/1 bits, so every
+    # OR proof and the bit-sum check hold. The verifier must cap the bit length.
+    from zkcredit.range_proof import RangeProof, _prove_bit_or
+
+    g = DEFAULT_GROUP
+    c, r = g.commit(-5)
+    wrapped = (-5) % g.q
+    k = g.q.bit_length()
+    blindings = [g.random_scalar() for _ in range(k - 1)]
+    partial = sum((1 << j) * rj for j, rj in enumerate(blindings)) % g.q
+    blindings.append(((r - partial) * pow(1 << (k - 1), -1, g.q)) % g.q)
+    bits = [(wrapped >> j) & 1 for j in range(k)]
+    bit_proofs = [
+        _prove_bit_or(bits[j], blindings[j], g.commit(bits[j], blindings[j])[0], c, j, "wrap", g)
+        for j in range(k)
+    ]
+    forged = RangeProof(commitment=c, shifted_commitment=c, lower_bound=0, bit_length=k,
+                        bit_proofs=bit_proofs, context="wrap")
+    assert not verify_range(forged, expected_commitment=c, context="wrap")

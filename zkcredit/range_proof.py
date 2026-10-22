@@ -23,6 +23,9 @@ from typing import Any, Dict, List
 
 from .crypto import DEFAULT_GROUP, IDENTITY, PedersenGroup, hash_to_scalar
 
+# Far below log2(q) ~ 252, so sums of range-proven values cannot wrap around the group order
+MAX_BIT_LENGTH = 64
+
 
 @dataclass(frozen=True)
 class BitOrProof:
@@ -257,8 +260,8 @@ def prove_range(
     """
     Proves in zero knowledge that `value >= lower_bound` and `value - lower_bound < 2^bit_length`.
     """
-    if bit_length < 2 or bit_length > 64:
-        raise ValueError("bit_length must be between 2 and 64.")
+    if not 2 <= bit_length <= MAX_BIT_LENGTH:
+        raise ValueError(f"bit_length must be between 2 and {MAX_BIT_LENGTH}.")
 
     c_actual, r_mod = group.commit(value, blinding)
     if commitment is not None and commitment != c_actual:
@@ -330,7 +333,8 @@ def verify_range(
         return False
     if context is not None and proof.context != context:
         return False
-    if len(proof.bit_proofs) != proof.bit_length or proof.bit_length < 2:
+    # Above MAX_BIT_LENGTH the bit sum can wrap around q and "prove" a negative value
+    if not (2 <= proof.bit_length <= MAX_BIT_LENGTH) or len(proof.bit_proofs) != proof.bit_length:
         return False
     if not (
         group.is_valid_element(proof.commitment)
