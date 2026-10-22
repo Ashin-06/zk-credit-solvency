@@ -263,10 +263,10 @@
 
   <div class="container">
     <div class="crypto-banner" id="cryptoBanner">
-      <span><strong>Group:</strong> 256-bit Safe Prime p = 2q + 1</span>
-      <span id="pInfo"><strong>p:</strong> loading...</span>
+      <span><strong>Group:</strong> Ed25519 prime-order subgroup (libsodium)</span>
+      <span id="pInfo"><strong>q:</strong> loading...</span>
       <span id="gInfo"><strong>g:</strong> loading...</span>
-      <span id="hInfo"><strong>h (NUMS SHA-256):</strong> loading...</span>
+      <span id="hInfo"><strong>h (hash-to-curve):</strong> loading...</span>
     </div>
 
     <div class="tabs">
@@ -284,7 +284,7 @@
               <span>Borrower Private Financial Witness (12 Months)</span>
               <span class="badge pass">Client-Side Private</span>
             </h2>
-            <p class="subtext">Raw Rupee figures stay with the borrower. Only Pedersen commitments C(v, r) = g^v h^r mod p and zero-knowledge range proofs are transmitted to the lender.</p>
+            <p class="subtext">Raw Rupee figures stay with the borrower. Only Pedersen commitments C(v, r) = v·g + r·h and zero-knowledge range proofs are transmitted to the lender.</p>
 
             <div class="form-row">
               <div>
@@ -523,7 +523,7 @@
         fetch("/health").then(r => r.json()),
         fetch("/presets").then(r => r.json())
       ]);
-      document.getElementById("pInfo").innerHTML = `<strong>p (${healthRes.group.prime_bits}b):</strong> ${healthRes.group.p.slice(0, 22)}...`;
+      document.getElementById("pInfo").innerHTML = `<strong>q (${healthRes.group.subgroup_bits}b):</strong> ${healthRes.group.q.slice(0, 22)}...`;
       document.getElementById("gInfo").innerHTML = `<strong>g:</strong> ${healthRes.group.g.slice(0, 18)}...`;
       document.getElementById("hInfo").innerHTML = `<strong>h (NUMS):</strong> ${healthRes.group.h.slice(0, 18)}...`;
 

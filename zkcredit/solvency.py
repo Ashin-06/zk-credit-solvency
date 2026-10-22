@@ -3,16 +3,16 @@ Merkle-Sum Commitment Tree (MSCT) for Cryptographic Neo-Bank Proof of Solvency.
 
 Architecture:
 - Each customer leaf i has balance b_i >= 0, blinding r_i in Z_q, and Pedersen commitment
-  C_i = g^(b_i) * h^(r_i) mod p, paired with a zero-knowledge RangeProof proving b_i in [0, 2^k).
-- Leaf hash: H_i = SHA256("zkcredit.msct.leaf.v1" || user_hash_i || hex(C_i)).
-- Internal nodes homomorphically multiply child commitments:
-    C_parent = C_L * C_R mod p = g^(b_L + b_R) * h^(r_L + r_R) mod p
+  C_i = b_i*g + r_i*h, paired with a zero-knowledge RangeProof proving b_i in [0, 2^k).
+- Leaf hash: H_i = SHA256("zkcredit.msct.leaf.v1" || user_hash_i || C_i).
+- Internal nodes homomorphically add child commitments:
+    C_parent = C_L + C_R = (b_L + b_R)*g + (r_L + r_R)*h
   and hash:
-    H_parent = SHA256("zkcredit.msct.node.v1" || H_L || hex(C_L) || H_R || hex(C_R) || hex(C_parent)).
+    H_parent = SHA256("zkcredit.msct.node.v1" || H_L || C_L || H_R || C_R || C_parent).
 - Root commitment C_root commits to total customer liabilities L = sum_i b_i.
-- The bank commits to its liquid reserves R via C_reserves = g^R * h^(r_reserves) mod p
+- The bank commits to its liquid reserves R via C_reserves = R*g + r_reserves*h
   and proves Solvency (R - L >= 0) in zero knowledge using a RangeProof on the homomorphic
-  quotient C_surplus = C_reserves * C_root^(-1) mod p = C(R - L, r_reserves - r_root).
+  difference C_surplus = C_reserves - C_root = C(R - L, r_reserves - r_root).
 - Any customer can verify their O(log N) Merkle-Sum inclusion path and sibling non-negativity
   proofs without seeing any other customer's balance.
 """
@@ -41,23 +41,23 @@ def compute_user_hash(user_id: str, salt: str = "zkcredit.neobank.v1") -> str:
     return hashlib.sha256(f"{salt}|{user_id}".encode("utf-8")).hexdigest()
 
 
-def compute_leaf_hash(user_hash: str, commitment: int) -> str:
-    """Computes leaf hash H("zkcredit.msct.leaf.v1" || user_hash || hex(C_i))."""
-    payload = f"zkcredit.msct.leaf.v1|{user_hash}|{hex(commitment)}".encode("utf-8")
+def compute_leaf_hash(user_hash: str, commitment: bytes) -> str:
+    """Computes leaf hash H("zkcredit.msct.leaf.v1" || user_hash || C_i)."""
+    payload = f"zkcredit.msct.leaf.v1|{user_hash}|{commitment.hex()}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
 def compute_node_hash(
     left_hash: str,
-    left_commitment: int,
+    left_commitment: bytes,
     right_hash: str,
-    right_commitment: int,
-    parent_commitment: int,
+    right_commitment: bytes,
+    parent_commitment: bytes,
 ) -> str:
     """Computes internal node hash binding both child hashes and homomorphic commitments."""
     payload = (
-        f"zkcredit.msct.node.v1|{left_hash}|{hex(left_commitment)}|"
-        f"{right_hash}|{hex(right_commitment)}|{hex(parent_commitment)}"
+        f"zkcredit.msct.node.v1|{left_hash}|{left_commitment.hex()}|"
+        f"{right_hash}|{right_commitment.hex()}|{parent_commitment.hex()}"
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
@@ -83,7 +83,7 @@ class LeafCommitmentNode:
 
     leaf_index: int
     user_hash: str
-    commitment: int
+    commitment: bytes
     node_hash: str
     range_proof: RangeProof
 
@@ -91,7 +91,7 @@ class LeafCommitmentNode:
         return {
             "leaf_index": self.leaf_index,
             "user_hash": self.user_hash,
-            "commitment": hex(self.commitment),
+            "commitment": self.commitment.hex(),
             "node_hash": self.node_hash,
             "range_proof": self.range_proof.to_dict(),
         }
@@ -101,7 +101,7 @@ class LeafCommitmentNode:
         return cls(
             leaf_index=int(data["leaf_index"]),
             user_hash=str(data["user_hash"]),
-            commitment=int(str(data["commitment"]), 0),
+            commitment=bytes.fromhex(str(data["commitment"])),
             node_hash=str(data["node_hash"]),
             range_proof=RangeProof.from_dict(data["range_proof"]),
         )
@@ -114,9 +114,9 @@ class InclusionStep:
     level: int
     sibling_position: str  # "L" if sibling is left child, "R" if sibling is right child
     sibling_hash: str
-    sibling_commitment: int
+    sibling_commitment: bytes
     sibling_nonneg_proof: RangeProof
-    parent_commitment: int
+    parent_commitment: bytes
     parent_hash: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -124,9 +124,9 @@ class InclusionStep:
             "level": self.level,
             "sibling_position": self.sibling_position,
             "sibling_hash": self.sibling_hash,
-            "sibling_commitment": hex(self.sibling_commitment),
+            "sibling_commitment": self.sibling_commitment.hex(),
             "sibling_nonneg_proof": self.sibling_nonneg_proof.to_dict(),
-            "parent_commitment": hex(self.parent_commitment),
+            "parent_commitment": self.parent_commitment.hex(),
             "parent_hash": self.parent_hash,
         }
 
@@ -136,9 +136,9 @@ class InclusionStep:
             level=int(data["level"]),
             sibling_position=str(data["sibling_position"]),
             sibling_hash=str(data["sibling_hash"]),
-            sibling_commitment=int(str(data["sibling_commitment"]), 0),
+            sibling_commitment=bytes.fromhex(str(data["sibling_commitment"])),
             sibling_nonneg_proof=RangeProof.from_dict(data["sibling_nonneg_proof"]),
-            parent_commitment=int(str(data["parent_commitment"]), 0),
+            parent_commitment=bytes.fromhex(str(data["parent_commitment"])),
             parent_hash=str(data["parent_hash"]),
         )
 
@@ -149,7 +149,7 @@ class CustomerInclusionProof:
     O(log N) zero-knowledge Merkle-Sum inclusion proof allowing a single customer to verify:
       1. Their exact balance b_i and secret blinding r_i open their leaf commitment C_i.
       2. Every sibling commitment along the path to C_root commits to a non-negative balance.
-      3. Every parent commitment along the path is the homomorphic product C_L * C_R mod p.
+      3. Every parent commitment along the path is the homomorphic sum C_L + C_R.
       4. The path terminates at the published (root_hash, root_commitment).
     """
 
@@ -158,12 +158,12 @@ class CustomerInclusionProof:
     leaf_index: int
     claimed_balance: int
     leaf_blinding: int
-    leaf_commitment: int
+    leaf_commitment: bytes
     leaf_hash: str
     leaf_range_proof: RangeProof
     path: List[InclusionStep]
     root_hash: str
-    root_commitment: int
+    root_commitment: bytes
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -172,12 +172,12 @@ class CustomerInclusionProof:
             "leaf_index": self.leaf_index,
             "claimed_balance": self.claimed_balance,
             "leaf_blinding": hex(self.leaf_blinding),
-            "leaf_commitment": hex(self.leaf_commitment),
+            "leaf_commitment": self.leaf_commitment.hex(),
             "leaf_hash": self.leaf_hash,
             "leaf_range_proof": self.leaf_range_proof.to_dict(),
             "path": [step.to_dict() for step in self.path],
             "root_hash": self.root_hash,
-            "root_commitment": hex(self.root_commitment),
+            "root_commitment": self.root_commitment.hex(),
         }
 
 
@@ -187,7 +187,7 @@ class _InternalTreeNode:
     index: int
     balance_sum: int
     blinding_sum: int
-    commitment: int
+    commitment: bytes
     node_hash: str
     range_proof: RangeProof | None = None
 
@@ -204,12 +204,12 @@ class SolvencyProofBundle:
     padded_leaves_count: int
     tree_depth: int
     root_hash: str
-    c_total_liabilities: int
-    c_reserves: int
-    c_surplus: int
+    c_total_liabilities: bytes
+    c_reserves: bytes
+    c_surplus: bytes
     leaves: List[LeafCommitmentNode]
     tree_levels_hashes: List[List[str]]
-    tree_levels_commitments: List[List[int]]
+    tree_levels_commitments: List[List[bytes]]
     reserve_surplus_proof: RangeProof
     sample_inclusion_proof: CustomerInclusionProof
     generation_ms: float
@@ -226,13 +226,13 @@ class SolvencyProofBundle:
             "padded_leaves_count": self.padded_leaves_count,
             "tree_depth": self.tree_depth,
             "root_hash": self.root_hash,
-            "c_total_liabilities": hex(self.c_total_liabilities),
-            "c_reserves": hex(self.c_reserves),
-            "c_surplus": hex(self.c_surplus),
+            "c_total_liabilities": self.c_total_liabilities.hex(),
+            "c_reserves": self.c_reserves.hex(),
+            "c_surplus": self.c_surplus.hex(),
             "leaves": [leaf.to_dict() for leaf in self.leaves],
             "tree_levels_hashes": self.tree_levels_hashes,
             "tree_levels_commitments": [
-                [hex(c) for c in level] for level in self.tree_levels_commitments
+                [c.hex() for c in level] for level in self.tree_levels_commitments
             ],
             "reserve_surplus_proof": self.reserve_surplus_proof.to_dict(),
             "sample_inclusion_proof": self.sample_inclusion_proof.to_dict(),
@@ -354,7 +354,7 @@ def build_solvency_proof(
             )
         )
 
-    # Build internal tree levels bottom-up via homomorphic commitment multiplication
+    # Build internal tree levels bottom-up via homomorphic commitment addition
     all_levels: List[List[_InternalTreeNode]] = [level0_nodes]
     current_level = level0_nodes
     lvl = 1
@@ -392,7 +392,7 @@ def build_solvency_proof(
     r_total_liabilities = root_node.blinding_sum
     c_total_liabilities = root_node.commitment
 
-    # Commit to bank reserves R and compute homomorphic surplus commitment C_reserves * C_root^(-1)
+    # Commit to bank reserves R and compute homomorphic surplus commitment C_reserves - C_root
     c_reserves, r_reserves = group.commit(liquid_reserves)
     c_surplus = group.sub_commitments(c_reserves, c_total_liabilities)
     r_surplus = (r_reserves - r_total_liabilities) % group.q
@@ -511,7 +511,7 @@ def build_solvency_proof(
 def verify_customer_inclusion(
     proof: CustomerInclusionProof,
     expected_root_hash: str,
-    expected_root_commitment: int,
+    expected_root_commitment: bytes,
     bank_id: str,
     bit_length: int = SOLVENCY_BIT_LENGTH,
     group: PedersenGroup = DEFAULT_GROUP,
@@ -591,8 +591,8 @@ def verify_solvency_audit(
       1. Verifies every leaf commitment has a valid RangeProof (b_i >= 0, preventing
          negative balance injection attacks).
       2. Recomputes the entire Merkle-Sum Commitment Tree bottom-up, checking that
-         every internal node equals C_L * C_R mod p and hashes match up to C_root.
-      3. Verifies C_surplus == C_reserves * C_root^(-1) mod p and verifies the
+         every internal node equals C_L + C_R and hashes match up to C_root.
+      3. Verifies C_surplus == C_reserves - C_root and verifies the
          zero-knowledge RangeProof that Reserves - TotalLiabilities >= 0.
       4. Verifies the O(log N) sample customer inclusion proof.
     """
@@ -600,7 +600,7 @@ def verify_solvency_audit(
 
     invalid_leaves: List[int] = []
     curr_hashes: List[str] = []
-    curr_comms: List[int] = []
+    curr_comms: List[bytes] = []
 
     for i, leaf in enumerate(bundle.leaves):
         if leaf.leaf_index != i:
@@ -631,7 +631,7 @@ def verify_solvency_audit(
     if tree_ok:
         while len(curr_comms) > 1:
             next_hashes: List[str] = []
-            next_comms: List[int] = []
+            next_comms: List[bytes] = []
             for idx in range(0, len(curr_comms), 2):
                 c_l, c_r = curr_comms[idx], curr_comms[idx + 1]
                 h_l, h_r = curr_hashes[idx], curr_hashes[idx + 1]

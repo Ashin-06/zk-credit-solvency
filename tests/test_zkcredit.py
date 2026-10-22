@@ -14,7 +14,6 @@ from zkcredit.api import app
 from zkcredit.bench import get_borrower_presets, get_solvency_presets, run_benchmark
 from zkcredit.crypto import (
     DEFAULT_GROUP,
-    is_prime,
     prove_equality,
     prove_opening,
     prove_zero_commitment,
@@ -45,10 +44,7 @@ from zkcredit.underwrite import (
 
 def test_safe_prime_group_and_homomorphism() -> None:
     g = DEFAULT_GROUP
-    assert g.p.bit_length() == 256
-    assert g.p == 2 * g.q + 1
-    assert is_prime(g.q)
-    assert is_prime(g.p)
+    assert g.q.bit_length() == 253
     assert g.g != g.h
     assert g.is_valid_element(g.g)
     assert g.is_valid_element(g.h)
@@ -66,7 +62,7 @@ def test_safe_prime_group_and_homomorphism() -> None:
     assert g.verify_opening(c_diff, v1 - v2, (r1 - r2) % g.q)
 
     # Homomorphic linear combination: 40 * v1 - 100 * v2
-    c_lin = g.sub_commitments(g.scale_commitment(c1, 40), g.scale_commitment(c2, 100))
+    c_lin = g.sub_commitments(g.mul(c1, 40), g.mul(c2, 100))
     assert g.verify_opening(c_lin, 40 * v1 - 100 * v2, (40 * r1 - 100 * r2) % g.q)
 
 
@@ -226,7 +222,7 @@ def test_fastapi_endpoints() -> None:
 
     r_health = client.get("/health")
     assert r_health.status_code == 200
-    assert r_health.json()["group"]["prime_bits"] == 256
+    assert r_health.json()["group"]["name"] == "ed25519"
 
     r_prove = client.post("/underwrite/prove", json={"preset_key": "prime_salaried"})
     assert r_prove.status_code == 200

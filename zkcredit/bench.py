@@ -375,11 +375,10 @@ def run_benchmark() -> Dict[str, Any]:
 
     return {
         "group_parameters": {
-            "prime_bits": DEFAULT_GROUP.p.bit_length(),
-            "SafePrime_p_prefix": hex(DEFAULT_GROUP.p)[:26] + "...",
+            "group": DEFAULT_GROUP.name,
             "SubgroupOrder_q_bits": DEFAULT_GROUP.q.bit_length(),
-            "generator_g_prefix": hex(DEFAULT_GROUP.g)[:22] + "...",
-            "generator_h_prefix": hex(DEFAULT_GROUP.h)[:22] + "...",
+            "generator_g_prefix": DEFAULT_GROUP.g.hex()[:20] + "...",
+            "generator_h_prefix": DEFAULT_GROUP.h.hex()[:20] + "...",
         },
         "summary": {
             "honest_total": len(honest_cases),
@@ -413,7 +412,7 @@ def format_benchmark_table(report: Dict[str, Any]) -> str:
     lines.append(" ZKCREDIT: ZERO-KNOWLEDGE CREDIT UNDERWRITING & PROOF-OF-SOLVENCY BENCHMARK ")
     lines.append("=" * 92)
     lines.append(
-        f" Group: {gp['prime_bits']}-bit Safe Prime p = 2q+1 | Order q: {gp['SubgroupOrder_q_bits']} bits"
+        f" Group: {gp['group']} prime-order subgroup | Order q: {gp['SubgroupOrder_q_bits']} bits"
     )
     lines.append(
         f" Completeness (Honest): {s['honest_verified']}/{s['honest_total']} ({s['completeness_rate']*100:.1f}%) | "

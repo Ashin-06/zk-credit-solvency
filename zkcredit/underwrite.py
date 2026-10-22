@@ -17,12 +17,11 @@ without revealing any raw Rupee figures:
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence
 
-from .crypto import DEFAULT_GROUP, PedersenGroup
+from .crypto import DEFAULT_GROUP, IDENTITY, PedersenGroup
 from .range_proof import (
     RangeProof,
     forge_range_proof_attempt,
@@ -91,25 +90,25 @@ class MonthlyCommitment:
     """Public Account-Aggregator attested Pedersen commitments for month m (zero raw values)."""
 
     month: int
-    c_income: int
-    c_debt: int
-    c_balance: int
+    c_income: bytes
+    c_debt: bytes
+    c_balance: bytes
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "month": self.month,
-            "c_income": hex(self.c_income),
-            "c_debt": hex(self.c_debt),
-            "c_balance": hex(self.c_balance),
+            "c_income": self.c_income.hex(),
+            "c_debt": self.c_debt.hex(),
+            "c_balance": self.c_balance.hex(),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MonthlyCommitment":
         return cls(
             month=int(data["month"]),
-            c_income=int(str(data["c_income"]), 0),
-            c_debt=int(str(data["c_debt"]), 0),
-            c_balance=int(str(data["c_balance"]), 0),
+            c_income=bytes.fromhex(str(data["c_income"])),
+            c_debt=bytes.fromhex(str(data["c_debt"])),
+            c_balance=bytes.fromhex(str(data["c_balance"])),
         )
 
 
@@ -123,10 +122,10 @@ class CreditProofBundle:
     applicant_id: str
     policy: UnderwritingPolicy
     monthly_commitments: List[MonthlyCommitment]
-    c_annual_income: int
-    c_annual_debt: int
-    c_net_cashflow: int
-    c_dti_margin: int
+    c_annual_income: bytes
+    c_annual_debt: bytes
+    c_net_cashflow: bytes
+    c_dti_margin: bytes
     net_cashflow_proof: RangeProof
     dti_proof: RangeProof
     eod_balance_proofs: List[RangeProof]
@@ -148,10 +147,10 @@ class CreditProofBundle:
             "applicant_id": self.applicant_id,
             "policy": self.policy.to_dict(),
             "monthly_commitments": [mc.to_dict() for mc in self.monthly_commitments],
-            "c_annual_income": hex(self.c_annual_income),
-            "c_annual_debt": hex(self.c_annual_debt),
-            "c_net_cashflow": hex(self.c_net_cashflow),
-            "c_dti_margin": hex(self.c_dti_margin),
+            "c_annual_income": self.c_annual_income.hex(),
+            "c_annual_debt": self.c_annual_debt.hex(),
+            "c_net_cashflow": self.c_net_cashflow.hex(),
+            "c_dti_margin": self.c_dti_margin.hex(),
             "net_cashflow_proof": self.net_cashflow_proof.to_dict(),
             "dti_proof": self.dti_proof.to_dict(),
             "eod_balance_proofs": [p.to_dict() for p in self.eod_balance_proofs],
@@ -167,10 +166,10 @@ class CreditProofBundle:
             monthly_commitments=[
                 MonthlyCommitment.from_dict(mc) for mc in data["monthly_commitments"]
             ],
-            c_annual_income=int(str(data["c_annual_income"]), 0),
-            c_annual_debt=int(str(data["c_annual_debt"]), 0),
-            c_net_cashflow=int(str(data["c_net_cashflow"]), 0),
-            c_dti_margin=int(str(data["c_dti_margin"]), 0),
+            c_annual_income=bytes.fromhex(str(data["c_annual_income"])),
+            c_annual_debt=bytes.fromhex(str(data["c_annual_debt"])),
+            c_net_cashflow=bytes.fromhex(str(data["c_net_cashflow"])),
+            c_dti_margin=bytes.fromhex(str(data["c_dti_margin"])),
             net_cashflow_proof=RangeProof.from_dict(data["net_cashflow_proof"]),
             dti_proof=RangeProof.from_dict(data["dti_proof"]),
             eod_balance_proofs=[
@@ -265,16 +264,16 @@ def generate_credit_proof(
     r_dti_margin = (policy.max_dti_pct * r_total_income - 100 * r_total_debt) % group.q
 
     # Compute homomorphic aggregate commitments from monthly commitments
-    c_annual_income = 1
-    c_annual_debt = 1
+    c_annual_income = IDENTITY
+    c_annual_debt = IDENTITY
     for mc in monthly_commitments:
         c_annual_income = group.add_commitments(c_annual_income, mc.c_income)
         c_annual_debt = group.add_commitments(c_annual_debt, mc.c_debt)
 
     c_net_cashflow = group.sub_commitments(c_annual_income, c_annual_debt)
     c_dti_margin = group.sub_commitments(
-        group.scale_commitment(c_annual_income, policy.max_dti_pct),
-        group.scale_commitment(c_annual_debt, 100),
+        group.mul(c_annual_income, policy.max_dti_pct),
+        group.mul(c_annual_debt, 100),
     )
 
     # 1. Prove Annual Net Disposable Cashflow >= policy.min_annual_net_cashflow
@@ -423,8 +422,8 @@ def verify_credit_proof(
         )
 
     # 1. Recompute homomorphic aggregate commitments from the 12 monthly AA commitments
-    recomputed_income = 1
-    recomputed_debt = 1
+    recomputed_income = IDENTITY
+    recomputed_debt = IDENTITY
     elements_valid = True
     for idx, mc in enumerate(bundle.monthly_commitments, start=1):
         if mc.month != idx:
@@ -442,8 +441,8 @@ def verify_credit_proof(
 
     recomputed_net = group.sub_commitments(recomputed_income, recomputed_debt)
     recomputed_dti = group.sub_commitments(
-        group.scale_commitment(recomputed_income, policy.max_dti_pct),
-        group.scale_commitment(recomputed_debt, 100),
+        group.mul(recomputed_income, policy.max_dti_pct),
+        group.mul(recomputed_debt, 100),
     )
 
     homomorphic_ok = (

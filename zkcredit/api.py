@@ -3,7 +3,7 @@ FastAPI Service for Zero-Knowledge Credit Underwriting & Neo-Bank Proof of Solve
 
 Endpoints:
 - GET  /                  -> Interactive dark/light web console (web/console.html)
-- GET  /health            -> Service health & 256-bit Safe Prime group parameters
+- GET  /health            -> Service health & group parameters
 - GET  /presets           -> Preset borrower & neo-bank solvency configurations
 - POST /underwrite/prove  -> Generate a zero-knowledge CreditProofBundle from 12-month records
 - POST /underwrite/verify -> Verify a CreditProofBundle using only public commitments & thresholds
@@ -101,12 +101,11 @@ def health() -> Dict[str, Any]:
         "service": "zkcredit",
         "port": 8012,
         "group": {
-            "prime_bits": DEFAULT_GROUP.p.bit_length(),
+            "name": DEFAULT_GROUP.name,
             "subgroup_bits": DEFAULT_GROUP.q.bit_length(),
-            "p": hex(DEFAULT_GROUP.p),
             "q": hex(DEFAULT_GROUP.q),
-            "g": hex(DEFAULT_GROUP.g),
-            "h": hex(DEFAULT_GROUP.h),
+            "g": DEFAULT_GROUP.g.hex(),
+            "h": DEFAULT_GROUP.h.hex(),
         },
     }
 

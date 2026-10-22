@@ -6,41 +6,40 @@ Proves in zero knowledge that a committed value v satisfies:
 without revealing v or its blinding factor r.
 
 Construction:
-1. Shift commitment by lower_bound: C' = C(v, r) * g^(-lower_bound) mod p = C(v - lower_bound, r).
+1. Shift commitment by lower_bound: C' = C(v, r) - lower_bound*g = C(v - lower_bound, r).
 2. Decompose v' = v - lower_bound into k bits: v' = sum_{j=0}^{k-1} b_j * 2^j with b_j in {0, 1}.
 3. Sample random bit blindings r_0, ..., r_{k-2} in Z_q and set
      r_{k-1} = (r - sum_{j=0}^{k-2} 2^j * r_j) * (2^{k-1})^(-1) mod q
    so that sum_{j=0}^{k-1} 2^j * r_j == r (mod q) and
-     prod_{j=0}^{k-1} (C_j)^(2^j) == C' (mod p).
-4. For each bit commitment C_j = g^(b_j) * h^(r_j) mod p, prove b_j in {0, 1} using a
+     sum_{j=0}^{k-1} 2^j * C_j == C'.
+4. For each bit commitment C_j = b_j*g + r_j*h, prove b_j in {0, 1} using a
    1-of-2 Cramer-Damgard-Schoenmakers (CDS) OR-Sigma proof via Fiat-Shamir.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from .crypto import DEFAULT_GROUP, PedersenGroup, hash_to_scalar
+from .crypto import DEFAULT_GROUP, IDENTITY, PedersenGroup, hash_to_scalar
 
 
 @dataclass(frozen=True)
 class BitOrProof:
     """
-    1-of-2 CDS OR-Sigma proof that bit_commitment C_j = g^(b_j) * h^(r_j) mod p
+    1-of-2 CDS OR-Sigma proof that bit_commitment C_j = b_j*g + r_j*h
     opens to b_j = 0 OR b_j = 1.
 
     Verification equations:
-      Y_0 = C_j,            T_0 = h^(s_0) * Y_0^(-e_0) mod p
-      Y_1 = C_j * g^(-1),   T_1 = h^(s_1) * Y_1^(-e_1) mod p
-      (e_0 + e_1) mod q == H("zkcredit.bit_or.v1", p, q, g, h, parent_C, bit_index, C_j, T_0, T_1, context)
+      Y_0 = C_j,         s_0*h == T_0 + e_0*Y_0
+      Y_1 = C_j - g,     s_1*h == T_1 + e_1*Y_1
+      (e_0 + e_1) mod q == H("zkcredit.bit_or.v2", g, h, parent_C, bit_index, C_j, T_0, T_1, context)
     """
 
     bit_index: int
-    bit_commitment: int
-    t0: int
-    t1: int
+    bit_commitment: bytes
+    t0: bytes
+    t1: bytes
     e0: int
     e1: int
     s0: int
@@ -49,9 +48,9 @@ class BitOrProof:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "bit_index": self.bit_index,
-            "bit_commitment": hex(self.bit_commitment),
-            "t0": hex(self.t0),
-            "t1": hex(self.t1),
+            "bit_commitment": self.bit_commitment.hex(),
+            "t0": self.t0.hex(),
+            "t1": self.t1.hex(),
             "e0": hex(self.e0),
             "e1": hex(self.e1),
             "s0": hex(self.s0),
@@ -62,9 +61,9 @@ class BitOrProof:
     def from_dict(cls, data: Dict[str, Any]) -> "BitOrProof":
         return cls(
             bit_index=int(data["bit_index"]),
-            bit_commitment=int(str(data["bit_commitment"]), 0),
-            t0=int(str(data["t0"]), 0),
-            t1=int(str(data["t1"]), 0),
+            bit_commitment=bytes.fromhex(str(data["bit_commitment"])),
+            t0=bytes.fromhex(str(data["t0"])),
+            t1=bytes.fromhex(str(data["t1"])),
             e0=int(str(data["e0"]), 0),
             e1=int(str(data["e1"]), 0),
             s0=int(str(data["s0"]), 0),
@@ -75,12 +74,12 @@ class BitOrProof:
 @dataclass(frozen=True)
 class RangeProof:
     """
-    Zero-knowledge range proof attesting that C = g^v * h^r mod p satisfies
+    Zero-knowledge range proof attesting that C = v*g + r*h satisfies
     v >= lower_bound and v - lower_bound < 2^bit_length.
     """
 
-    commitment: int
-    shifted_commitment: int
+    commitment: bytes
+    shifted_commitment: bytes
     lower_bound: int
     bit_length: int
     bit_proofs: List[BitOrProof]
@@ -94,8 +93,8 @@ class RangeProof:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "commitment": hex(self.commitment),
-            "shifted_commitment": hex(self.shifted_commitment),
+            "commitment": self.commitment.hex(),
+            "shifted_commitment": self.shifted_commitment.hex(),
             "lower_bound": self.lower_bound,
             "bit_length": self.bit_length,
             "bit_proofs": [bp.to_dict() for bp in self.bit_proofs],
@@ -106,8 +105,8 @@ class RangeProof:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RangeProof":
         return cls(
-            commitment=int(str(data["commitment"]), 0),
-            shifted_commitment=int(str(data["shifted_commitment"]), 0),
+            commitment=bytes.fromhex(str(data["commitment"])),
+            shifted_commitment=bytes.fromhex(str(data["shifted_commitment"])),
             lower_bound=int(data["lower_bound"]),
             bit_length=int(data["bit_length"]),
             bit_proofs=[BitOrProof.from_dict(bp) for bp in data["bit_proofs"]],
@@ -118,8 +117,8 @@ class RangeProof:
 def _prove_bit_or(
     bit: int,
     bit_blinding: int,
-    bit_commitment: int,
-    parent_shifted_commitment: int,
+    bit_commitment: bytes,
+    parent_shifted_commitment: bytes,
     bit_index: int,
     context: str,
     group: PedersenGroup,
@@ -130,9 +129,8 @@ def _prove_bit_or(
     if bit not in (0, 1):
         raise ValueError(f"Bit must be 0 or 1, got {bit}")
 
-    g_inv = pow(group.g, -1, group.p)
     y0 = bit_commitment
-    y1 = (bit_commitment * g_inv) % group.p
+    y1 = group.sub_commitments(bit_commitment, group.g)
 
     # Nonce k for the true branch, random challenge & response for the simulated branch
     k = group.random_scalar()
@@ -141,12 +139,10 @@ def _prove_bit_or(
 
     if bit == 0:
         # True branch is 0 (y0 = h^r_j), simulated branch is 1
-        t0 = pow(group.h, k, group.p)
-        t1 = (pow(group.h, sim_s, group.p) * pow(y1, -sim_e % group.q, group.p)) % group.p
+        t0 = group.mul(group.h, k)
+        t1 = group.sub_commitments(group.mul(group.h, sim_s), group.mul(y1, sim_e))
         e_total = hash_to_scalar(
-            "zkcredit.bit_or.v1",
-            group.p,
-            group.q,
+            "zkcredit.bit_or.v2",
             group.g,
             group.h,
             parent_shifted_commitment,
@@ -163,12 +159,10 @@ def _prove_bit_or(
         s1 = sim_s
     else:
         # True branch is 1 (y1 = h^r_j), simulated branch is 0
-        t1 = pow(group.h, k, group.p)
-        t0 = (pow(group.h, sim_s, group.p) * pow(y0, -sim_e % group.q, group.p)) % group.p
+        t1 = group.mul(group.h, k)
+        t0 = group.sub_commitments(group.mul(group.h, sim_s), group.mul(y0, sim_e))
         e_total = hash_to_scalar(
-            "zkcredit.bit_or.v1",
-            group.p,
-            group.q,
+            "zkcredit.bit_or.v2",
             group.g,
             group.h,
             parent_shifted_commitment,
@@ -198,7 +192,7 @@ def _prove_bit_or(
 
 def _verify_bit_or(
     bp: BitOrProof,
-    parent_shifted_commitment: int,
+    parent_shifted_commitment: bytes,
     expected_bit_index: int,
     context: str,
     group: PedersenGroup,
@@ -220,27 +214,24 @@ def _verify_bit_or(
     ):
         return False
 
-    g_inv = pow(group.g, -1, group.p)
     y0 = bp.bit_commitment
-    y1 = (bp.bit_commitment * g_inv) % group.p
+    y1 = group.sub_commitments(bp.bit_commitment, group.g)
 
-    # Check branch 0: h^s0 == t0 * y0^e0 mod p
-    lhs0 = pow(group.h, bp.s0, group.p)
-    rhs0 = (bp.t0 * pow(y0, bp.e0, group.p)) % group.p
+    # Check branch 0: s0*h == t0 + e0*y0
+    lhs0 = group.mul(group.h, bp.s0)
+    rhs0 = group.add_commitments(bp.t0, group.mul(y0, bp.e0))
     if lhs0 != rhs0:
         return False
 
-    # Check branch 1: h^s1 == t1 * y1^e1 mod p
-    lhs1 = pow(group.h, bp.s1, group.p)
-    rhs1 = (bp.t1 * pow(y1, bp.e1, group.p)) % group.p
+    # Check branch 1: s1*h == t1 + e1*y1
+    lhs1 = group.mul(group.h, bp.s1)
+    rhs1 = group.add_commitments(bp.t1, group.mul(y1, bp.e1))
     if lhs1 != rhs1:
         return False
 
     # Check Fiat-Shamir challenge split: (e0 + e1) mod q == H(...)
     e_expected = hash_to_scalar(
-        "zkcredit.bit_or.v1",
-        group.p,
-        group.q,
+        "zkcredit.bit_or.v2",
         group.g,
         group.h,
         parent_shifted_commitment,
@@ -257,7 +248,7 @@ def _verify_bit_or(
 def prove_range(
     value: int,
     blinding: int,
-    commitment: int | None = None,
+    commitment: bytes | None = None,
     lower_bound: int = 0,
     bit_length: int = 24,
     context: str = "",
@@ -322,7 +313,7 @@ def prove_range(
 
 def verify_range(
     proof: RangeProof,
-    expected_commitment: int | None = None,
+    expected_commitment: bytes | None = None,
     expected_lower_bound: int | None = None,
     expected_bit_length: int | None = None,
     context: str | None = None,
@@ -347,20 +338,19 @@ def verify_range(
     ):
         return False
 
-    # 1. Verify that shifted_commitment == commitment * g^(-lower_bound) mod p
+    # 1. Verify that shifted_commitment == commitment - lower_bound*g
     expected_shifted = group.shift_commitment(proof.commitment, -proof.lower_bound)
     if proof.shifted_commitment != expected_shifted:
         return False
 
     # 2. Verify each 1-of-2 CDS OR-Sigma bit proof and accumulate homomorphic product
-    reconstructed = 1
+    reconstructed = IDENTITY
     for j, bp in enumerate(proof.bit_proofs):
         if not _verify_bit_or(bp, proof.shifted_commitment, j, proof.context, group):
             return False
-        weight = 1 << j
-        reconstructed = (reconstructed * pow(bp.bit_commitment, weight, group.p)) % group.p
+        reconstructed = group.add_commitments(reconstructed, group.mul(bp.bit_commitment, 1 << j))
 
-    # 3. Verify homomorphic bit-reconstruction: prod_{j=0}^{k-1} C_j^(2^j) == shifted_commitment (mod p)
+    # 3. Verify homomorphic bit-reconstruction: sum_{j=0}^{k-1} 2^j * C_j == shifted_commitment
     return reconstructed == proof.shifted_commitment
 
 
@@ -401,7 +391,7 @@ def forge_range_proof_attempt(
     bit_blindings.append(r_last)
 
     bit_proofs: List[BitOrProof] = []
-    partial_product = 1
+    partial_product = IDENTITY
     for j in range(bit_length):
         if strategy == "fake_bit_opening" and j == bit_length - 1:
             # Force C_{k-1}^(2^{k-1}) * partial_product == c_shifted
@@ -417,7 +407,7 @@ def forge_range_proof_attempt(
                 group=group,
             )
             # Tamper with bit_commitment so homomorphic product would match a different value
-            tampered_cj = (cj * group.g) % group.p
+            tampered_cj = group.add_commitments(cj, group.g)
             bp = BitOrProof(
                 bit_index=bp.bit_index,
                 bit_commitment=tampered_cj,
@@ -439,7 +429,7 @@ def forge_range_proof_attempt(
                 context=context,
                 group=group,
             )
-            partial_product = (partial_product * pow(cj, 1 << j, group.p)) % group.p
+            partial_product = group.add_commitments(partial_product, group.mul(cj, 1 << j))
         bit_proofs.append(bp)
 
     return RangeProof(

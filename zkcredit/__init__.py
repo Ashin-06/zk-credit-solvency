@@ -5,13 +5,12 @@
 from .bench import format_benchmark_table, get_borrower_presets, get_solvency_presets, run_benchmark
 from .crypto import (
     DEFAULT_GROUP,
+    IDENTITY,
     OpeningProof,
     PedersenGroup,
     ZeroCommitmentProof,
-    derive_safe_prime_256,
     hash_to_group,
     hash_to_scalar,
-    is_prime,
     prove_equality,
     prove_opening,
     prove_zero_commitment,
@@ -49,11 +48,10 @@ from .underwrite import (
 
 __all__ = [
     "DEFAULT_GROUP",
+    "IDENTITY",
     "PedersenGroup",
     "OpeningProof",
     "ZeroCommitmentProof",
-    "is_prime",
-    "derive_safe_prime_256",
     "hash_to_group",
     "hash_to_scalar",
     "prove_opening",
