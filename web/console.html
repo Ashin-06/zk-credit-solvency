@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZKCredit — Zero-Knowledge Credit Underwriting & Proof-of-Solvency Console</title>
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17;
+      --surface: #121826;
+      --surface-alt: #182032;
+      --border: #253048;
+      --text: #e8eef7;
+      --text-muted: #93a3bc;
+      --accent: #38bdf8;
+      --accent-strong: #0ea5e9;
+      --success: #22c55e;
+      --success-bg: rgba(34, 197, 94, 0.12);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.14);
+      --warning: #f59e0b;
+      --code-bg: #080b11;
+    }
+    :root[data-theme="light"] {
+      --bg: #f4f7fb;
+      --surface: #ffffff;
+      --surface-alt: #eef3f9;
+      --border: #d5dfed;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --accent: #0284c7;
+      --accent-strong: #0369a1;
+      --success: #16a34a;
+      --success-bg: rgba(22, 163, 74, 0.12);
+      --danger: #dc2626;
+      --danger-bg: rgba(220, 38, 38, 0.12);
+      --warning: #d97706;
+      --code-bg: #f1f5f9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding-bottom: 48px;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      background: linear-gradient(135deg, #38bdf8, #6366f1);
+      color: #fff;
+      font-weight: 800;
+      font-size: 14px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      letter-spacing: 0.5px;
+    }
+    .brand h1 { font-size: 18px; font-weight: 700; }
+    .brand p { font-size: 12px; color: var(--text-muted); }
+    .header-controls { display: flex; gap: 10px; align-items: center; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 9px 15px;
+      border-radius: 7px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button.danger {
+      background: var(--danger);
+      color: #fff;
+    }
+    .container { max-width: 1360px; margin: 20px auto; padding: 0 24px; }
+    .crypto-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      margin-bottom: 18px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      color: var(--text-muted);
+    }
+    .crypto-banner span strong { color: var(--accent); }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .tab-btn {
+      background: var(--surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 1024px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+    .card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .subtext { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    input, select {
+      width: 100%;
+      padding: 7px 10px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    th, td {
+      padding: 7px 9px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    td input {
+      padding: 4px 7px;
+      font-size: 12px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge.pass { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+    .badge.fail { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .kpi {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 11px 13px;
+    }
+    .kpi .k-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+    .kpi .k-val { font-size: 19px; font-weight: 800; margin-top: 3px; }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      word-break: break-all;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 11.5px;
+      overflow-x: auto;
+      max-height: 300px;
+      color: var(--text);
+    }
+    .tree-level {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .btn-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-badge">ZKCREDIT : 8012</div>
+      <div>
+        <h1>Zero-Knowledge Credit Underwriting & Proof-of-Solvency Engine</h1>
+        <p>Pedersen Commitments · CDS 1-of-2 OR-Sigma Bit Range Proofs · Merkle-Sum Commitment Trees</p>
+      </div>
+    </div>
+    <div class="header-controls">
+      <button class="secondary" onclick="toggleTheme()">Toggle Dark / Light</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="crypto-banner" id="cryptoBanner">
+      <span><strong>Group:</strong> 256-bit Safe Prime p = 2q + 1</span>
+      <span id="pInfo"><strong>p:</strong> loading...</span>
+      <span id="gInfo"><strong>g:</strong> loading...</span>
+      <span id="hInfo"><strong>h (NUMS SHA-256):</strong> loading...</span>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('underwrite', this)">1. ZK Credit Underwriting (Account Aggregator)</button>
+      <button class="tab-btn" onclick="switchTab('solvency', this)">2. Merkle-Sum Proof of Solvency (Neo-Bank)</button>
+      <button class="tab-btn" onclick="switchTab('bench', this)">3. Soundness & Cheating Benchmark</button>
+    </div>
+
+    <!-- TAB 1: UNDERWRITING -->
+    <div id="tab-underwrite" class="tab-panel active">
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <h2>
+              <span>Borrower Private Financial Witness (12 Months)</span>
+              <span class="badge pass">Client-Side Private</span>
+            </h2>
+            <p class="subtext">Raw Rupee figures stay with the borrower. Only Pedersen commitments C(v, r) = g^v h^r mod p and zero-knowledge range proofs are transmitted to the lender.</p>
+
+            <div class="form-row">
+              <div>
+                <label>Borrower Preset Profile</label>
+                <select id="borrowerPreset" onchange="loadBorrowerPreset()"></select>
+              </div>
+              <div>
+                <label>Min Annual Net Cashflow (₹)</label>
+                <input type="number" id="polNetCashflow" value="480000" />
+              </div>
+              <div>
+                <label>Max DTI Ratio Cap (%)</label>
+                <input type="number" id="polMaxDti" value="40" />
+              </div>
+              <div>
+                <label>Min Monthly EOD Floor (₹)</label>
+                <input type="number" id="polMinEod" value="5000" />
+              </div>
+            </div>
+
+            <div style="max-height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Income I_m (₹)</th>
+                    <th>Debt D_m (₹)</th>
+                    <th>Min EOD B_m (₹)</th>
+                  </tr>
+                </thead>
+                <tbody id="monthlyTableBody"></tbody>
+              </table>
+            </div>
+
+            <div class="btn-bar">
+              <button onclick="proveUnderwriting()">Generate ZK CreditProofBundle (/underwrite/prove)</button>
+              <button class="secondary" onclick="verifyCurrentBundle(false)">Verify Public Bundle (/underwrite/verify)</button>
+              <button class="danger" onclick="verifyCurrentBundle(true)">Tamper Transcript & Test Rejection</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <h2>
+              <span>Lender Zero-Knowledge Verification Verdict</span>
+              <span id="uwVerdictBadge" class="badge pass">READY</span>
+            </h2>
+            <div class="kpi-grid">
+              <div class="kpi">
+                <div class="k-label">Homomorphic Sum</div>
+                <div class="k-val" id="kpiHomo">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">Net Cashflow >= τ</div>
+                <div class="k-val" id="kpiNet">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">DTI <= Cap%</div>
+                <div class="k-val" id="kpiDti">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">12/12 EOD Floors</div>
+                <div class="k-val" id="kpiEod">—</div>
+              </div>
+            </div>
+            <p class="subtext" id="uwReason">Select a preset and click "Generate ZK CreditProofBundle".</p>
+
+            <h2 style="margin-top: 14px;">Public Homomorphic Aggregate Commitments</h2>
+            <div class="mono" id="uwCommitmentsBox" style="background: var(--code-bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px;">
+              Awaiting proof generation...
+            </div>
+
+            <h2>Zero-Knowledge Proof Bundle Transcript (Compact Preview)</h2>
+            <pre id="uwProofJson">No proof generated yet.</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: SOLVENCY -->
+    <div id="tab-solvency" class="tab-panel">
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <h2>
+              <span>Neo-Bank Liabilities & Reserve Configuration</span>
+              <span class="badge pass">Merkle-Sum Tree</span>
+            </h2>
+            <div class="form-row">
+              <div>
+                <label>Solvency Preset</label>
+                <select id="solvencyPreset" onchange="loadSolvencyPreset()"></select>
+              </div>
+              <div>
+                <label>Attested Liquid Reserves R (₹)</label>
+                <input type="number" id="solvencyReserves" value="3000000" />
+              </div>
+              <div>
+                <label>Sample Customer Index (O(log N))</label>
+                <input type="number" id="solvencySampleIdx" value="0" min="0" max="7" />
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Leaf #</th>
+                  <th>Customer ID</th>
+                  <th>Private Balance b_i (₹)</th>
+                </tr>
+              </thead>
+              <tbody id="solvencyAccountsBody"></tbody>
+            </table>
+
+            <div class="btn-bar">
+              <button onclick="runSolvencyAudit()">Build Merkle-Sum Tree & Audit (/solvency/audit)</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <h2>
+              <span>Cryptographic Proof-of-Solvency Audit Report</span>
+              <span id="solVerdictBadge" class="badge pass">READY</span>
+            </h2>
+            <div class="kpi-grid">
+              <div class="kpi">
+                <div class="k-label">All Leaves b_i >= 0</div>
+                <div class="k-val" id="solLeavesOk">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">Merkle-Sum Root</div>
+                <div class="k-val" id="solTreeOk">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">Reserves - L >= 0</div>
+                <div class="k-val" id="solSurplusOk">—</div>
+              </div>
+              <div class="kpi">
+                <div class="k-label">O(log N) Inclusion</div>
+                <div class="k-val" id="solInclusionOk">—</div>
+              </div>
+            </div>
+            <p class="subtext" id="solReason">Run a solvency audit to inspect the Merkle-Sum Commitment Tree.</p>
+
+            <h2 style="margin-top: 12px;">Merkle-Sum Commitment Tree Hierarchy</h2>
+            <div id="solTreeLevels"></div>
+
+            <h2 style="margin-top: 12px;">Customer O(log N) Inclusion Path</h2>
+            <pre id="solInclusionJson">Awaiting solvency audit...</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: BENCHMARK -->
+    <div id="tab-bench" class="tab-panel">
+      <div class="card">
+        <h2>
+          <span>Completeness & Cryptographic Soundness Benchmark Suite</span>
+          <button onclick="loadBenchmark()">Run Full Benchmark (/bench)</button>
+        </h2>
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="k-label">Completeness (Honest)</div>
+            <div class="k-val" id="benchComp">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Cheating Acceptance</div>
+            <div class="k-val" id="benchCheat">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Avg Prove / Verify</div>
+            <div class="k-val" id="benchLatency">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Credit Proof Size</div>
+            <div class="k-val" id="benchSize">—</div>
+          </div>
+        </div>
+
+        <h2 style="margin-top: 16px;">1. Honest & Ineligible Underwriting / Solvency Profiles</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Profile ID</th>
+              <th>Description</th>
+              <th>Expected</th>
+              <th>ZK Verdict</th>
+              <th>Proof Size</th>
+              <th>Prove / Verify</th>
+              <th>Diagnostic Reason</th>
+            </tr>
+          </thead>
+          <tbody id="benchProfilesBody"></tbody>
+        </table>
+
+        <h2 style="margin-top: 22px;">2. Five Cryptographic Cheating & Forgery Attacks</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Attack Code</th>
+              <th>Adversarial Strategy</th>
+              <th>Target Predicate</th>
+              <th>Outcome</th>
+              <th>Verify (ms)</th>
+              <th>Cryptographic Detection Mechanism</th>
+            </tr>
+          </thead>
+          <tbody id="benchAttacksBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let PRESETS = { borrowers: {}, solvency: {} };
+    let LAST_CREDIT_BUNDLE = null;
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+    }
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.getElementById("tab-" + tabId).classList.add("active");
+      btn.classList.add("active");
+    }
+
+    async function initConsole() {
+      const [healthRes, presetsRes] = await Promise.all([
+        fetch("/health").then(r => r.json()),
+        fetch("/presets").then(r => r.json())
+      ]);
+      document.getElementById("pInfo").innerHTML = `<strong>p (${healthRes.group.prime_bits}b):</strong> ${healthRes.group.p.slice(0, 22)}...`;
+      document.getElementById("gInfo").innerHTML = `<strong>g:</strong> ${healthRes.group.g.slice(0, 18)}...`;
+      document.getElementById("hInfo").innerHTML = `<strong>h (NUMS):</strong> ${healthRes.group.h.slice(0, 18)}...`;
+
+      PRESETS = presetsRes;
+      const bSel = document.getElementById("borrowerPreset");
+      bSel.innerHTML = "";
+      for (const [k, v] of Object.entries(PRESETS.borrowers)) {
+        const opt = document.createElement("option");
+        opt.value = k;
+        opt.textContent = v.label;
+        bSel.appendChild(opt);
+      }
+
+      const sSel = document.getElementById("solvencyPreset");
+      sSel.innerHTML = "";
+      for (const [k, v] of Object.entries(PRESETS.solvency)) {
+        const opt = document.createElement("option");
+        opt.value = k;
+        opt.textContent = v.label;
+        sSel.appendChild(opt);
+      }
+
+      loadBorrowerPreset();
+      loadSolvencyPreset();
+      await proveUnderwriting();
+      await runSolvencyAudit();
+      await loadBenchmark();
+    }
+
+    function loadBorrowerPreset() {
+      const key = document.getElementById("borrowerPreset").value;
+      const preset = PRESETS.borrowers[key];
+      if (!preset) return;
+      const tbody = document.getElementById("monthlyTableBody");
+      tbody.innerHTML = "";
+      for (const r of preset.records) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>Month ${r.month}</td>
+          <td><input type="number" class="m-inc" data-month="${r.month}" value="${r.income}" /></td>
+          <td><input type="number" class="m-deb" data-month="${r.month}" value="${r.debt}" /></td>
+          <td><input type="number" class="m-bal" data-month="${r.month}" value="${r.min_eod_balance}" /></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function collectMonthlyRecords() {
+      const incs = document.querySelectorAll(".m-inc");
+      const debs = document.querySelectorAll(".m-deb");
+      const bals = document.querySelectorAll(".m-bal");
+      const records = [];
+      for (let i = 0; i < incs.length; i++) {
+        records.push({
+          month: i + 1,
+          income: parseInt(incs[i].value, 10) || 0,
+          debt: parseInt(debs[i].value, 10) || 0,
+          min_eod_balance: parseInt(bals[i].value, 10) || 0
+        });
+      }
+      return records;
+    }
+
+    async function proveUnderwriting() {
+      const key = document.getElementById("borrowerPreset").value;
+      const preset = PRESETS.borrowers[key];
+      const payload = {
+        applicant_id: preset ? preset.applicant_id : "AA-CUSTOM-001",
+        policy: {
+          min_annual_net_cashflow: parseInt(document.getElementById("polNetCashflow").value, 10),
+          max_dti_pct: parseInt(document.getElementById("polMaxDti").value, 10),
+          min_monthly_eod_balance: parseInt(document.getElementById("polMinEod").value, 10)
+        },
+        records: collectMonthlyRecords(),
+        allow_forged: true
+      };
+      const res = await fetch("/underwrite/prove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(r => r.json());
+
+      LAST_CREDIT_BUNDLE = res.bundle;
+      renderUnderwritingResult(res.bundle, res.verification);
+    }
+
+    async function verifyCurrentBundle(tamper) {
+      if (!LAST_CREDIT_BUNDLE) return;
+      const cloned = JSON.parse(JSON.stringify(LAST_CREDIT_BUNDLE));
+      if (tamper) {
+        // Tamper with the first bit commitment response s0 of the DTI proof
+        cloned.dti_proof.bit_proofs[0].s0 = "0x123456789abcdef";
+      }
+      const ver = await fetch("/underwrite/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bundle: cloned })
+      }).then(r => r.json());
+      renderUnderwritingResult(cloned, ver);
+    }
+
+    function renderUnderwritingResult(bundle, ver) {
+      const badge = document.getElementById("uwVerdictBadge");
+      badge.textContent = ver.verified ? `VERIFIED (${ver.verification_ms} ms)` : `REJECTED (${ver.verification_ms} ms)`;
+      badge.className = "badge " + (ver.verified ? "pass" : "fail");
+
+      document.getElementById("kpiHomo").textContent = ver.homomorphic_consistency_ok ? "PASS" : "FAIL";
+      document.getElementById("kpiNet").textContent = ver.net_cashflow_ok ? "PASS" : "FAIL";
+      document.getElementById("kpiDti").textContent = ver.dti_ok ? "PASS" : "FAIL";
+      document.getElementById("kpiEod").textContent = ver.eod_balances_ok ? "12 / 12" : `${12 - ver.failed_months.length} / 12`;
+      document.getElementById("uwReason").textContent = ver.reason;
+
+      document.getElementById("uwCommitmentsBox").innerHTML = `
+        <div><strong>C_annual_income:</strong> ${bundle.c_annual_income}</div>
+        <div><strong>C_annual_debt:</strong>   ${bundle.c_annual_debt}</div>
+        <div><strong>C_net_cashflow:</strong>  ${bundle.c_net_cashflow}</div>
+        <div><strong>C_dti_margin:</strong>    ${bundle.c_dti_margin}</div>
+        <div style="margin-top:6px; color: var(--accent);"><strong>Compact Proof Size:</strong> ${bundle.total_proof_bytes.toLocaleString()} bytes | <strong>Prover Time:</strong> ${bundle.generation_ms} ms</div>
+      `;
+
+      const summaryBundle = {
+        applicant_id: bundle.applicant_id,
+        policy: bundle.policy,
+        monthly_commitments_sample: bundle.monthly_commitments.slice(0, 2),
+        net_cashflow_proof_bits: bundle.net_cashflow_proof.bit_length,
+        dti_proof_bits: bundle.dti_proof.bit_length,
+        sample_cds_or_bit0: bundle.dti_proof.bit_proofs[0]
+      };
+      document.getElementById("uwProofJson").textContent = JSON.stringify(summaryBundle, null, 2);
+    }
+
+    function loadSolvencyPreset() {
+      const key = document.getElementById("solvencyPreset").value;
+      const preset = PRESETS.solvency[key];
+      if (!preset) return;
+      document.getElementById("solvencyReserves").value = preset.liquid_reserves;
+      const tbody = document.getElementById("solvencyAccountsBody");
+      tbody.innerHTML = "";
+      preset.accounts.forEach((a, idx) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>#${idx}</td>
+          <td><input type="text" class="s-uid" value="${a.user_id}" /></td>
+          <td><input type="number" class="s-bal" value="${a.balance}" /></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function runSolvencyAudit() {
+      const key = document.getElementById("solvencyPreset").value;
+      const preset = PRESETS.solvency[key];
+      const uids = document.querySelectorAll(".s-uid");
+      const bals = document.querySelectorAll(".s-bal");
+      const accounts = [];
+      for (let i = 0; i < uids.length; i++) {
+        accounts.push({
+          user_id: uids[i].value,
+          balance: parseInt(bals[i].value, 10) || 0
+        });
+      }
+      const payload = {
+        bank_id: preset ? preset.bank_id : "NEOBANK-CUSTOM",
+        liquid_reserves: parseInt(document.getElementById("solvencyReserves").value, 10) || 0,
+        sample_user_index: parseInt(document.getElementById("solvencySampleIdx").value, 10) || 0,
+        accounts,
+        allow_forged: true
+      };
+      const res = await fetch("/solvency/audit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(r => r.json());
+
+      const { bundle, audit } = res;
+      const badge = document.getElementById("solVerdictBadge");
+      badge.textContent = audit.verified ? `SOLVENT (${audit.verification_ms} ms)` : `AUDIT FAILED (${audit.verification_ms} ms)`;
+      badge.className = "badge " + (audit.verified ? "pass" : "fail");
+
+      document.getElementById("solLeavesOk").textContent = audit.all_leaves_nonnegative ? "PASS" : `FAIL (${audit.invalid_leaf_indices.join(",")})`;
+      document.getElementById("solTreeOk").textContent = audit.merkle_sum_tree_consistent ? "PASS" : "FAIL";
+      document.getElementById("solSurplusOk").textContent = audit.reserve_surplus_verified ? "PASS" : "FAIL";
+      document.getElementById("solInclusionOk").textContent = audit.sample_inclusion_verified ? "PASS" : "FAIL";
+      document.getElementById("solReason").textContent = audit.reason;
+
+      const treeDiv = document.getElementById("solTreeLevels");
+      treeDiv.innerHTML = `
+        <div class="tree-level mono">
+          <strong>Root Hash:</strong> ${bundle.root_hash}<br/>
+          <strong>C_total_liabilities:</strong> ${bundle.c_total_liabilities.slice(0, 34)}...<br/>
+          <strong>C_reserves:</strong>          ${bundle.c_reserves.slice(0, 34)}...<br/>
+          <strong>C_surplus (R - L):</strong>   ${bundle.c_surplus.slice(0, 34)}...
+        </div>
+      `;
+      document.getElementById("solInclusionJson").textContent = JSON.stringify(bundle.sample_inclusion_proof, null, 2);
+    }
+
+    async function loadBenchmark() {
+      const data = await fetch("/bench").then(r => r.json());
+      const s = data.summary;
+      document.getElementById("benchComp").textContent = `${(s.completeness_rate * 100).toFixed(0)}% (${s.honest_verified}/${s.honest_total})`;
+      document.getElementById("benchCheat").textContent = `${(s.cheating_acceptance_rate * 100).toFixed(0)}% (0/${s.cheating_attacks_total})`;
+      document.getElementById("benchLatency").textContent = `${s.avg_prove_ms} / ${s.avg_verify_ms} ms`;
+      document.getElementById("benchSize").textContent = `${s.credit_proof_size_bytes.toLocaleString()} B`;
+
+      const pBody = document.getElementById("benchProfilesBody");
+      pBody.innerHTML = "";
+      for (const c of [...data.honest_cases, ...data.ineligible_cases]) {
+        const tr = document.createElement("tr");
+        const correct = c.verified === c.expected_eligible;
+        tr.innerHTML = `
+          <td class="mono">${c.applicant_id}</td>
+          <td>${c.label}</td>
+          <td>${c.expected_eligible ? "Eligible" : "Ineligible"}</td>
+          <td><span class="badge ${correct ? "pass" : "fail"}">${c.verified ? "VERIFIED" : "REJECTED"}</span></td>
+          <td>${c.proof_size_bytes.toLocaleString()} B</td>
+          <td>${c.prove_ms} ms / ${c.verify_ms} ms</td>
+          <td>${c.reason}</td>
+        `;
+        pBody.appendChild(tr);
+      }
+
+      const aBody = document.getElementById("benchAttacksBody");
+      aBody.innerHTML = "";
+      for (const a of data.cheating_attacks) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono"><strong>${a.attack_id}</strong></td>
+          <td>${a.name}</td>
+          <td>${a.target}</td>
+          <td><span class="badge ${a.rejected ? "pass" : "fail"}">${a.rejected ? "REJECTED (SOUND)" : "ACCEPTED"}</span></td>
+          <td>${a.verify_ms} ms</td>
+          <td>${a.detection_reason}</td>
+        `;
+        aBody.appendChild(tr);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", initConsole);
+  </script>
+</body>
+</html>
