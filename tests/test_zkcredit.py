@@ -23,7 +23,6 @@ from zkcredit.crypto import (
     verify_zero_commitment,
 )
 from zkcredit.range_proof import (
-    BitOrProof,
     forge_range_proof_attempt,
     prove_range,
     verify_range,
