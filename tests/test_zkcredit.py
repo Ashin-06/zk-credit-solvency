@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from zkcredit.api import app
@@ -133,15 +134,19 @@ def test_underwriting_honest_and_ineligible_profiles() -> None:
         min_monthly_eod_balance=5_000,
     )
     presets = get_borrower_presets()
+    fip = Ed25519PrivateKey.generate()
+    fip_pub = fip.public_key()
 
     # Honest Prime Salaried
     prime_bundle = generate_credit_proof(
         applicant_id="TEST-PRIME",
         records=presets["prime_salaried"]["records"],
         policy=policy,
+        fip_key=fip,
     )
-    prime_res = verify_credit_proof(prime_bundle, expected_policy=policy)
+    prime_res = verify_credit_proof(prime_bundle, expected_policy=policy, fip_public_key=fip_pub)
     assert prime_res.verified is True
+    assert prime_res.attestation_ok is True
     assert prime_res.homomorphic_consistency_ok is True
     assert prime_res.net_cashflow_ok is True
     assert prime_res.dti_ok is True
@@ -150,7 +155,17 @@ def test_underwriting_honest_and_ineligible_profiles() -> None:
 
     # Roundtrip dictionary serialization
     rehydrated = CreditProofBundle.from_dict(prime_bundle.to_dict())
-    assert verify_credit_proof(rehydrated, expected_policy=policy).verified is True
+    assert verify_credit_proof(rehydrated, expected_policy=policy, fip_public_key=fip_pub).verified is True
+
+    # Without the trusted FIP key, or signed by some other key, the same proofs are rejected
+    assert verify_credit_proof(prime_bundle, expected_policy=policy).verified is False
+    invented = [MonthlyFinancialRecord(m, 500_000, 0, 1_000_000) for m in range(1, 13)]
+    self_made = generate_credit_proof("TEST-PRIME", invented, policy, fip_key=Ed25519PrivateKey.generate())
+    self_res = verify_credit_proof(self_made, expected_policy=policy, fip_public_key=fip_pub)
+    assert self_res.verified is False and self_res.attestation_ok is False
+    # Re-labelling a signed bundle for another applicant breaks the signature
+    relabelled = replace(prime_bundle, applicant_id="SOMEONE-ELSE")
+    assert verify_credit_proof(relabelled, expected_policy=policy, fip_public_key=fip_pub).attestation_ok is False
 
     # Overdraft in Month 7 fails only Month 7 EOD predicate
     od_bundle = generate_credit_proof(
@@ -158,8 +173,9 @@ def test_underwriting_honest_and_ineligible_profiles() -> None:
         records=presets["overdraft_month7"]["records"],
         policy=policy,
         allow_forged=True,
+        fip_key=fip,
     )
-    od_res = verify_credit_proof(od_bundle, expected_policy=policy)
+    od_res = verify_credit_proof(od_bundle, expected_policy=policy, fip_public_key=fip_pub)
     assert od_res.verified is False
     assert od_res.net_cashflow_ok is True
     assert od_res.dti_ok is True
@@ -209,8 +225,8 @@ def test_benchmark_100pct_completeness_and_0pct_cheating() -> None:
     assert summary["completeness_rate"] == 1.0
     assert summary["cheating_acceptance_rate"] == 0.0
     assert summary["soundness_rejection_rate"] == 1.0
-    assert summary["cheating_attacks_total"] == 5
-    assert summary["cheating_attacks_rejected"] == 5
+    assert summary["cheating_attacks_total"] == 6
+    assert summary["cheating_attacks_rejected"] == 6
 
 
 def test_fastapi_endpoints() -> None:

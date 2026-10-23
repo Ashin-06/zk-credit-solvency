@@ -13,6 +13,11 @@ without revealing any raw Rupee figures:
   2. Debt-to-Income Ratio Cap:       100 * sum(D_m) <= max_dti_pct * sum(I_m)
                                      <=> max_dti_pct * sum(I_m) - 100 * sum(D_m) >= 0
   3. Zero Overdraft / Min EOD Floor: B_m >= min_monthly_eod_balance for all m in 1..12
+
+The proofs only mean something if the commitments are tied to real statements, so the FIP
+(the bank holding the account) signs the 36 monthly commitments with Ed25519 and the lender
+checks that signature against a FIP public key it already trusts. In this demo one process
+plays FIP and borrower; in a real flow the FIP commits and hands the openings to the borrower.
 """
 
 from __future__ import annotations
@@ -20,6 +25,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from .crypto import DEFAULT_GROUP, IDENTITY, PedersenGroup
 from .range_proof import (
@@ -130,6 +138,7 @@ class CreditProofBundle:
     dti_proof: RangeProof
     eod_balance_proofs: List[RangeProof]
     generation_ms: float
+    fip_signature: bytes = b""
 
     def total_proof_bytes(self) -> int:
         """Total compact binary size of all commitments and range proofs in bytes."""
@@ -156,6 +165,7 @@ class CreditProofBundle:
             "eod_balance_proofs": [p.to_dict() for p in self.eod_balance_proofs],
             "generation_ms": round(self.generation_ms, 3),
             "total_proof_bytes": self.total_proof_bytes(),
+            "fip_signature": self.fip_signature.hex(),
         }
 
     @classmethod
@@ -176,7 +186,21 @@ class CreditProofBundle:
                 RangeProof.from_dict(p) for p in data["eod_balance_proofs"]
             ],
             generation_ms=float(data.get("generation_ms", 0.0)),
+            fip_signature=bytes.fromhex(str(data.get("fip_signature", ""))),
         )
+
+
+def attestation_message(applicant_id: str, monthly_commitments: Sequence[MonthlyCommitment]) -> bytes:
+    """Bytes the FIP signs: the applicant and all 36 monthly commitments, in month order."""
+    return (
+        b"zkcredit.fip_attestation.v1|"
+        + applicant_id.encode("utf-8")
+        + b"|"
+        + b"".join(
+            mc.month.to_bytes(1, "big") + mc.c_income + mc.c_debt + mc.c_balance
+            for mc in monthly_commitments
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -185,6 +209,7 @@ class UnderwritingVerificationResult:
 
     applicant_id: str
     verified: bool
+    attestation_ok: bool
     homomorphic_consistency_ok: bool
     net_cashflow_ok: bool
     dti_ok: bool
@@ -198,6 +223,7 @@ class UnderwritingVerificationResult:
         return {
             "applicant_id": self.applicant_id,
             "verified": self.verified,
+            "attestation_ok": self.attestation_ok,
             "homomorphic_consistency_ok": self.homomorphic_consistency_ok,
             "net_cashflow_ok": self.net_cashflow_ok,
             "dti_ok": self.dti_ok,
@@ -214,6 +240,7 @@ def generate_credit_proof(
     records: Sequence[MonthlyFinancialRecord],
     policy: UnderwritingPolicy = UnderwritingPolicy(),
     allow_forged: bool = False,
+    fip_key: Ed25519PrivateKey | None = None,
     group: PedersenGroup = DEFAULT_GROUP,
 ) -> CreditProofBundle:
     """
@@ -223,9 +250,15 @@ def generate_credit_proof(
     policy threshold. If `allow_forged=True` (used for adversarial soundness tests and UI
     rejection demos), constructs forged range proofs for violated predicates so the verifier
     can cryptographically detect and reject them.
+
+    `fip_key` signs the monthly commitments as the FIP would. Without it the bundle carries no
+    attestation and `verify_credit_proof` will reject it.
     """
     if len(records) != 12:
         raise ValueError(f"Expected 12 monthly records, got {len(records)}.")
+    if any(r.income < 0 or r.debt < 0 for r in records):
+        # A negative debt would lower the DTI margin's debt term; no statement has one
+        raise ValueError("Monthly income and debt must be non-negative.")
 
     t0 = time.perf_counter()
     sorted_records = sorted(records, key=lambda r: r.month)
@@ -358,6 +391,9 @@ def generate_credit_proof(
             )
         eod_proofs.append(b_proof)
 
+    signature = (
+        fip_key.sign(attestation_message(applicant_id, monthly_commitments)) if fip_key else b""
+    )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     return CreditProofBundle(
         applicant_id=applicant_id,
@@ -371,17 +407,23 @@ def generate_credit_proof(
         dti_proof=dti_proof,
         eod_balance_proofs=eod_proofs,
         generation_ms=elapsed_ms,
+        fip_signature=signature,
     )
 
 
 def verify_credit_proof(
     bundle: CreditProofBundle,
     expected_policy: UnderwritingPolicy | None = None,
+    fip_public_key: Ed25519PublicKey | None = None,
     group: PedersenGroup = DEFAULT_GROUP,
 ) -> UnderwritingVerificationResult:
     """
     Verifies a `CreditProofBundle` using ONLY the public commitments and policy thresholds.
     Zero raw income, debt, or balance numbers are ever accessed.
+
+    `fip_public_key` is the FIP key the lender already trusts (never one taken from the
+    bundle). Without it, or with a bad signature, the bundle is rejected: unsigned commitments
+    can hold any numbers the borrower likes.
     """
     t0 = time.perf_counter()
     policy = expected_policy if expected_policy is not None else bundle.policy
@@ -396,6 +438,7 @@ def verify_credit_proof(
         return UnderwritingVerificationResult(
             applicant_id=bundle.applicant_id,
             verified=False,
+            attestation_ok=False,
             homomorphic_consistency_ok=False,
             net_cashflow_ok=False,
             dti_ok=False,
@@ -411,6 +454,7 @@ def verify_credit_proof(
         return UnderwritingVerificationResult(
             applicant_id=bundle.applicant_id,
             verified=False,
+            attestation_ok=False,
             homomorphic_consistency_ok=False,
             net_cashflow_ok=False,
             dti_ok=False,
@@ -420,6 +464,18 @@ def verify_credit_proof(
             verification_ms=elapsed_ms,
             reason="Bundle must contain exactly 12 monthly commitments and 12 EOD proofs.",
         )
+
+    # 0. The monthly commitments must carry the trusted FIP's signature
+    attested_ok = False
+    if fip_public_key is not None:
+        try:
+            fip_public_key.verify(
+                bundle.fip_signature,
+                attestation_message(bundle.applicant_id, bundle.monthly_commitments),
+            )
+            attested_ok = True
+        except InvalidSignature:
+            pass
 
     # 1. Recompute homomorphic aggregate commitments from the 12 monthly AA commitments
     recomputed_income = IDENTITY
@@ -491,9 +547,15 @@ def verify_credit_proof(
             failed_months.append(mc.month)
 
     eod_ok = len(failed_months) == 0
-    verified = homomorphic_ok and net_ok and dti_ok and eod_ok
+    verified = attested_ok and homomorphic_ok and net_ok and dti_ok and eod_ok
 
     reasons: List[str] = []
+    if not attested_ok:
+        reasons.append(
+            "Monthly commitments are not signed by the trusted FIP key"
+            if fip_public_key is not None
+            else "No trusted FIP key given, so the commitments are unattested"
+        )
     if not homomorphic_ok:
         reasons.append("Homomorphic aggregate commitment mismatch (forged opening/linear combination)")
     if not net_ok:
@@ -512,6 +574,7 @@ def verify_credit_proof(
     return UnderwritingVerificationResult(
         applicant_id=bundle.applicant_id,
         verified=verified,
+        attestation_ok=attested_ok,
         homomorphic_consistency_ok=homomorphic_ok,
         net_cashflow_ok=net_ok,
         dti_ok=dti_ok,

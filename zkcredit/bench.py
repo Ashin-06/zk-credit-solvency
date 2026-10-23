@@ -5,18 +5,23 @@ Evaluates:
 1. Honest Borrower Profiles (100% Completeness)
 2. Ineligible / Sub-Prime Borrower Profiles (0% False Acceptance)
 3. Honest Neo-Bank Merkle-Sum Proof of Solvency (100% Completeness)
-4. Five Cryptographic Cheating / Forgery Attacks (0% Soundness Acceptance):
+4. Six Cryptographic Cheating / Forgery Attacks (0% Soundness Acceptance):
    - Attack 1: Forged Commitment Opening (violating AA homomorphic sum)
    - Attack 2: Negative Balance Injection in Merkle-Sum Tree (insolvent bank)
    - Attack 3: DTI Above Policy Cap (forged range proof on negative DTI margin)
    - Attack 4: Single-Month Overdraft Concealment (Month 7 EOD < floor)
    - Attack 5: Tampered Fiat-Shamir Transcript (mutated CDS OR-Sigma challenge)
+   - Attack 6: Self-Made Commitments (invented figures, not signed by the FIP)
+
+All borrower and bank data here is hand-written preset data, not real statements.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any, Dict, List
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .crypto import DEFAULT_GROUP
 from .range_proof import BitOrProof, prove_range
@@ -165,6 +170,8 @@ def run_benchmark() -> Dict[str, Any]:
     )
     presets = get_borrower_presets()
     solvency_presets = get_solvency_presets()
+    fip_key = Ed25519PrivateKey.generate()  # stands in for the account-holding bank
+    fip_pub = fip_key.public_key()
 
     honest_cases: List[Dict[str, Any]] = []
     ineligible_cases: List[Dict[str, Any]] = []
@@ -175,8 +182,9 @@ def run_benchmark() -> Dict[str, Any]:
             records=cfg["records"],
             policy=policy,
             allow_forged=not cfg["expected_eligible"],
+            fip_key=fip_key,
         )
-        ver = verify_credit_proof(bundle, expected_policy=policy)
+        ver = verify_credit_proof(bundle, expected_policy=policy, fip_public_key=fip_pub)
         entry = {
             "preset_key": key,
             "applicant_id": cfg["applicant_id"],
@@ -239,6 +247,7 @@ def run_benchmark() -> Dict[str, Any]:
         records=low_cf_records,
         policy=policy,
         allow_forged=True,
+        fip_key=fip_key,
     )
     # Attacker replaces c_net_cashflow and net_cashflow_proof with a valid commitment to ₹6,50,000
     fake_c_net, fake_r_net = DEFAULT_GROUP.commit(650_000)
@@ -255,7 +264,7 @@ def run_benchmark() -> Dict[str, Any]:
         c_net_cashflow=fake_c_net,
         net_cashflow_proof=fake_net_proof,
     )
-    atk1_res = verify_credit_proof(forged_opening_bundle, expected_policy=policy)
+    atk1_res = verify_credit_proof(forged_opening_bundle, expected_policy=policy, fip_public_key=fip_pub)
     cheating_attacks.append(
         {
             "attack_id": "ATK-01",
@@ -296,8 +305,9 @@ def run_benchmark() -> Dict[str, Any]:
         records=presets["high_dti_subprime"]["records"],
         policy=policy,
         allow_forged=True,
+        fip_key=fip_key,
     )
-    atk3_res = verify_credit_proof(dti_bundle, expected_policy=policy)
+    atk3_res = verify_credit_proof(dti_bundle, expected_policy=policy, fip_public_key=fip_pub)
     cheating_attacks.append(
         {
             "attack_id": "ATK-03",
@@ -316,8 +326,9 @@ def run_benchmark() -> Dict[str, Any]:
         records=presets["overdraft_month7"]["records"],
         policy=policy,
         allow_forged=True,
+        fip_key=fip_key,
     )
-    atk4_res = verify_credit_proof(od_bundle, expected_policy=policy)
+    atk4_res = verify_credit_proof(od_bundle, expected_policy=policy, fip_public_key=fip_pub)
     cheating_attacks.append(
         {
             "attack_id": "ATK-04",
@@ -336,6 +347,7 @@ def run_benchmark() -> Dict[str, Any]:
         records=presets["prime_salaried"]["records"],
         policy=policy,
         allow_forged=False,
+        fip_key=fip_key,
     )
     orig_bp = valid_bundle.dti_proof.bit_proofs[0]
     tampered_bp = BitOrProof(
@@ -353,7 +365,7 @@ def run_benchmark() -> Dict[str, Any]:
         bit_proofs=[tampered_bp] + valid_bundle.dti_proof.bit_proofs[1:],
     )
     tampered_bundle = replace(valid_bundle, dti_proof=tampered_dti_proof)
-    atk5_res = verify_credit_proof(tampered_bundle, expected_policy=policy)
+    atk5_res = verify_credit_proof(tampered_bundle, expected_policy=policy, fip_public_key=fip_pub)
     cheating_attacks.append(
         {
             "attack_id": "ATK-05",
@@ -363,6 +375,27 @@ def run_benchmark() -> Dict[str, Any]:
             "rejected": not atk5_res.verified,
             "verify_ms": round(atk5_res.verification_ms, 2),
             "detection_reason": atk5_res.reason,
+        }
+    )
+
+    # Attack 6: borrower skips the FIP, commits to invented figures and proves them honestly
+    invented = [MonthlyFinancialRecord(m, 500_000, 0, 1_000_000) for m in range(1, 13)]
+    self_made = generate_credit_proof(
+        applicant_id="ATK-06-SELF-MADE",
+        records=invented,
+        policy=policy,
+        fip_key=Ed25519PrivateKey.generate(),
+    )
+    atk6_res = verify_credit_proof(self_made, expected_policy=policy, fip_public_key=fip_pub)
+    cheating_attacks.append(
+        {
+            "attack_id": "ATK-06",
+            "name": "Self-Made Commitments (Invented Figures, Own Key)",
+            "target": "FIP Ed25519 Attestation of Monthly Commitments",
+            "accepted": atk6_res.verified,
+            "rejected": not atk6_res.verified,
+            "verify_ms": round(atk6_res.verification_ms, 2),
+            "detection_reason": atk6_res.reason,
         }
     )
 
@@ -433,7 +466,7 @@ def format_benchmark_table(report: Dict[str, Any]) -> str:
             f"{c['proof_size_bytes']:<10} {c['prove_ms']:<10.2f} {c['verify_ms']:<10.2f}"
         )
     lines.append("-" * 92)
-    lines.append(" [2] CRYPTOGRAPHIC CHEATING & FORGERY ATTACKS (SOUNDNESS SUITE)")
+    lines.append(" [2] CHEATING & FORGERY ATTEMPTS")
     lines.append(f" {'Code':<8} {'Attack Name':<52} {'Accepted':<10} {'Verify(ms)':<10}")
     lines.append(" " + "-" * 88)
     for a in report["cheating_attacks"]:

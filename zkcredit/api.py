@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -45,6 +46,10 @@ app = FastAPI(
 )
 
 _CONSOLE_PATH = Path(__file__).resolve().parent.parent / "web" / "console.html"
+
+# Demo FIP signing key, new on every start. A real lender pins the FIPs' published keys.
+FIP_KEY = Ed25519PrivateKey.generate()
+FIP_PUBLIC_KEY = FIP_KEY.public_key()
 
 
 class MonthlyRecordInput(BaseModel):
@@ -107,6 +112,7 @@ def health() -> Dict[str, Any]:
             "g": DEFAULT_GROUP.g.hex(),
             "h": DEFAULT_GROUP.h.hex(),
         },
+        "demo_fip_public_key": FIP_PUBLIC_KEY.public_bytes_raw().hex(),
     }
 
 
@@ -173,11 +179,12 @@ def underwrite_prove(req: UnderwriteProveRequest) -> Dict[str, Any]:
             records=records,
             policy=policy,
             allow_forged=req.allow_forged,
+            fip_key=FIP_KEY,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    verification = verify_credit_proof(bundle, expected_policy=policy)
+    verification = verify_credit_proof(bundle, expected_policy=policy, fip_public_key=FIP_PUBLIC_KEY)
     return {
         "bundle": bundle.to_dict(),
         "verification": verification.to_dict(),
@@ -199,7 +206,7 @@ def underwrite_verify(req: UnderwriteVerifyRequest) -> Dict[str, Any]:
             min_monthly_eod_balance=req.expected_policy.min_monthly_eod_balance,
         )
 
-    result = verify_credit_proof(bundle, expected_policy=expected_policy)
+    result = verify_credit_proof(bundle, expected_policy=expected_policy, fip_public_key=FIP_PUBLIC_KEY)
     return result.to_dict()
 
 
