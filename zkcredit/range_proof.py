@@ -89,10 +89,10 @@ class RangeProof:
     context: str = ""
 
     def byte_size(self) -> int:
-        """Compact serialized size in bytes (each bit proof stores C_j, e0, e1, s0, s1 as 32-byte scalars)."""
-        # Header: commitment (32B) + lower_bound (8B) + bit_length (2B)
-        # Per bit: C_j (32B) + e0 (32B) + e1 (32B) + s0 (32B) + s1 (32B) = 160B
-        return 42 + self.bit_length * 160
+        """Size in bytes of what to_dict() carries, encoded as raw 32-byte points and scalars."""
+        # Header: commitment + shifted commitment (32B each) + lower_bound (8B) + bit_length (2B)
+        # Per bit: C_j, t0, t1 (32B points) + e0, e1, s0, s1 (32B scalars) = 224B
+        return 74 + self.bit_length * 224
 
     def to_dict(self) -> Dict[str, Any]:
         return {

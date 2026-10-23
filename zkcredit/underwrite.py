@@ -141,9 +141,9 @@ class CreditProofBundle:
     fip_signature: bytes = b""
 
     def total_proof_bytes(self) -> int:
-        """Total compact binary size of all commitments and range proofs in bytes."""
-        # 12 * 3 monthly commitments + 4 aggregate commitments = 40 * 32B = 1280B
-        commitments_bytes = 40 * 32
+        """Total compact binary size of all commitments, range proofs and the FIP signature."""
+        # 12 * 3 monthly commitments + 4 aggregate commitments = 40 * 32B = 1280B, signature 64B
+        commitments_bytes = 40 * 32 + 64
         proofs_bytes = (
             self.net_cashflow_proof.byte_size()
             + self.dti_proof.byte_size()
