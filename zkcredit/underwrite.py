@@ -449,7 +449,11 @@ def verify_credit_proof(
             reason="Policy mismatch between proof bundle and verifier policy thresholds.",
         )
 
-    if len(bundle.monthly_commitments) != 12 or len(bundle.eod_balance_proofs) != 12:
+    if (
+        len(bundle.monthly_commitments) != 12
+        or len(bundle.eod_balance_proofs) != 12
+        or [mc.month for mc in bundle.monthly_commitments] != list(range(1, 13))
+    ):
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return UnderwritingVerificationResult(
             applicant_id=bundle.applicant_id,
@@ -462,7 +466,7 @@ def verify_credit_proof(
             failed_months=[],
             proof_size_bytes=bundle.total_proof_bytes(),
             verification_ms=elapsed_ms,
-            reason="Bundle must contain exactly 12 monthly commitments and 12 EOD proofs.",
+            reason="Bundle must contain 12 monthly commitments numbered 1..12 and 12 EOD proofs.",
         )
 
     # 0. The monthly commitments must carry the trusted FIP's signature

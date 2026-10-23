@@ -9,16 +9,21 @@ Endpoints:
 - POST /underwrite/verify -> Verify a CreditProofBundle using only public commitments & thresholds
 - POST /solvency/audit    -> Build & audit a Merkle-Sum Commitment Tree Proof-of-Solvency
 - GET  /bench             -> Run completeness, soundness, proof-size & latency benchmark
+
+Set ZKCREDIT_API_KEY to require it in the X-API-Key header on the POST endpoints and /bench
+(unset = open, for local use; `python -m zkcredit serve` refuses a non-loopback host without it).
 """
 
 from __future__ import annotations
 
+import hmac
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .bench import get_borrower_presets, get_solvency_presets, run_benchmark
@@ -46,6 +51,24 @@ app = FastAPI(
 )
 
 _CONSOLE_PATH = Path(__file__).resolve().parent.parent / "web" / "console.html"
+API_KEY = os.environ.get("ZKCREDIT_API_KEY")
+MAX_BODY_BYTES = 1_000_000  # a full credit bundle is about 200 KB of JSON
+MAX_ACCOUNTS = 64  # each leaf costs a range proof; this keeps one request to a few seconds
+MAX_AMOUNT = 10**12  # rupees; anything larger is a typo or an attempt to burn CPU
+
+
+def require_key(x_api_key: str | None = Header(default=None)) -> None:
+    if API_KEY and not hmac.compare_digest(x_api_key or "", API_KEY):
+        raise HTTPException(401, "missing or wrong X-API-Key")
+
+
+@app.middleware("http")
+async def limit_body(request: Request, call_next):
+    if request.method == "POST":
+        length = request.headers.get("content-length", "")
+        if not length.isdigit() or int(length) > MAX_BODY_BYTES:
+            return JSONResponse({"detail": "body missing Content-Length or over 1 MB"}, status_code=413)
+    return await call_next(request)
 
 # Demo FIP signing key, new on every start. A real lender pins the FIPs' published keys.
 FIP_KEY = Ed25519PrivateKey.generate()
@@ -54,23 +77,23 @@ FIP_PUBLIC_KEY = FIP_KEY.public_key()
 
 class MonthlyRecordInput(BaseModel):
     month: int = Field(..., ge=1, le=12)
-    income: int
-    debt: int
-    min_eod_balance: int
+    income: int = Field(..., ge=0, le=MAX_AMOUNT)
+    debt: int = Field(..., ge=0, le=MAX_AMOUNT)
+    min_eod_balance: int = Field(..., ge=-MAX_AMOUNT, le=MAX_AMOUNT)
 
 
 class PolicyInput(BaseModel):
-    min_annual_net_cashflow: int = 480_000
-    max_dti_pct: int = 40
-    min_monthly_eod_balance: int = 5_000
+    min_annual_net_cashflow: int = Field(480_000, ge=-MAX_AMOUNT, le=MAX_AMOUNT)
+    max_dti_pct: int = Field(40, ge=0, le=100)
+    min_monthly_eod_balance: int = Field(5_000, ge=-MAX_AMOUNT, le=MAX_AMOUNT)
 
 
 class UnderwriteProveRequest(BaseModel):
-    applicant_id: str = "AA-IN-BORROWER-001"
-    preset_key: Optional[str] = None
+    applicant_id: str = Field("AA-IN-BORROWER-001", min_length=1, max_length=64)
+    preset_key: Optional[str] = Field(None, max_length=64)
     policy: PolicyInput = Field(default_factory=PolicyInput)
-    records: Optional[List[MonthlyRecordInput]] = None
-    allow_forged: bool = True
+    records: Optional[List[MonthlyRecordInput]] = Field(None, max_length=12)
+    allow_forged: bool = False  # True builds forged proofs for failing predicates (rejection demo)
 
 
 class UnderwriteVerifyRequest(BaseModel):
@@ -79,17 +102,17 @@ class UnderwriteVerifyRequest(BaseModel):
 
 
 class CustomerAccountInput(BaseModel):
-    user_id: str
-    balance: int
+    user_id: str = Field(..., min_length=1, max_length=64)
+    balance: int = Field(..., ge=-MAX_AMOUNT, le=MAX_AMOUNT)
 
 
 class SolvencyAuditRequest(BaseModel):
-    bank_id: str = "NEOBANK-RESERVE-01"
-    preset_key: Optional[str] = None
-    liquid_reserves: int = 3_000_000
-    accounts: Optional[List[CustomerAccountInput]] = None
-    sample_user_index: int = 0
-    allow_forged: bool = True
+    bank_id: str = Field("NEOBANK-RESERVE-01", min_length=1, max_length=64)
+    preset_key: Optional[str] = Field(None, max_length=64)
+    liquid_reserves: int = Field(3_000_000, ge=0, le=MAX_AMOUNT)
+    accounts: Optional[List[CustomerAccountInput]] = Field(None, max_length=MAX_ACCOUNTS)
+    sample_user_index: int = Field(0, ge=0, lt=MAX_ACCOUNTS)
+    allow_forged: bool = False  # True builds forged proofs for negative leaves (rejection demo)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -144,7 +167,7 @@ def presets() -> Dict[str, Any]:
     }
 
 
-@app.post("/underwrite/prove")
+@app.post("/underwrite/prove", dependencies=[Depends(require_key)])
 def underwrite_prove(req: UnderwriteProveRequest) -> Dict[str, Any]:
     b_presets = get_borrower_presets()
     if req.preset_key and req.preset_key in b_presets:
@@ -191,7 +214,7 @@ def underwrite_prove(req: UnderwriteProveRequest) -> Dict[str, Any]:
     }
 
 
-@app.post("/underwrite/verify")
+@app.post("/underwrite/verify", dependencies=[Depends(require_key)])
 def underwrite_verify(req: UnderwriteVerifyRequest) -> Dict[str, Any]:
     try:
         bundle = CreditProofBundle.from_dict(req.bundle)
@@ -210,7 +233,7 @@ def underwrite_verify(req: UnderwriteVerifyRequest) -> Dict[str, Any]:
     return result.to_dict()
 
 
-@app.post("/solvency/audit")
+@app.post("/solvency/audit", dependencies=[Depends(require_key)])
 def solvency_audit(req: SolvencyAuditRequest) -> Dict[str, Any]:
     s_presets = get_solvency_presets()
     if req.preset_key and req.preset_key in s_presets:
@@ -249,6 +272,6 @@ def solvency_audit(req: SolvencyAuditRequest) -> Dict[str, Any]:
     }
 
 
-@app.get("/bench")
+@app.get("/bench", dependencies=[Depends(require_key)])
 def bench() -> Dict[str, Any]:
     return run_benchmark()

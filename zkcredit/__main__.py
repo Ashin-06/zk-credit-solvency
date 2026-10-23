@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import uvicorn
@@ -44,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if cmd == "serve":
+        if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("ZKCREDIT_API_KEY"):
+            print("Refusing to listen on a non-loopback address without ZKCREDIT_API_KEY set.", file=sys.stderr)
+            return 2
         uvicorn.run("zkcredit.api:app", host=args.host, port=args.port, reload=False)
         return 0
 

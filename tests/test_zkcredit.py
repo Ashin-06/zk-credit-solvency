@@ -299,3 +299,28 @@ def test_solvency_scales_and_keeps_customers_private() -> None:
     proof = bundle.sample_inclusion_proof
     flipped = replace(proof, path=[replace(proof.path[0], sibling_position="R")] + proof.path[1:])
     assert not verify_customer_inclusion(flipped, bundle.root_hash, bundle.c_total_liabilities, "BIG-BANK")
+
+
+def test_api_key_and_input_limits(monkeypatch) -> None:
+    import zkcredit.api as api
+
+    client = TestClient(app)
+    monkeypatch.setattr(api, "API_KEY", "s3cret")
+    assert client.post("/underwrite/prove", json={"preset_key": "prime_salaried"}).status_code == 401
+    assert client.get("/bench").status_code == 401
+    assert client.get("/health").status_code == 200
+
+    hdr = {"X-API-Key": "s3cret"}
+    ok = client.post("/underwrite/prove", json={"preset_key": "prime_salaried"}, headers=hdr)
+    assert ok.status_code == 200
+    bundle = ok.json()["bundle"]
+
+    # Malformed month numbers are a clean rejection, not a server error
+    bundle["monthly_commitments"][0]["month"] = 999
+    bad = client.post("/underwrite/verify", json={"bundle": bundle}, headers=hdr)
+    assert bad.status_code == 200 and bad.json()["verified"] is False
+
+    too_many = [{"user_id": f"u{i}", "balance": 1} for i in range(api.MAX_ACCOUNTS + 1)]
+    assert client.post("/solvency/audit", json={"accounts": too_many}, headers=hdr).status_code == 422
+    assert client.post("/underwrite/prove", content=b"x" * (api.MAX_BODY_BYTES + 1),
+                       headers={**hdr, "Content-Type": "application/json"}).status_code == 413

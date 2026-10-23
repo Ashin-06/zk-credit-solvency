@@ -257,6 +257,7 @@
       </div>
     </div>
     <div class="header-controls">
+      <input type="password" id="apiKey" placeholder="X-API-Key (if set)" autocomplete="off" />
       <button class="secondary" onclick="toggleTheme()">Toggle Dark / Light</button>
     </div>
   </header>
@@ -506,6 +507,13 @@
     let PRESETS = { borrowers: {}, solvency: {} };
     let LAST_CREDIT_BUNDLE = null;
 
+    function api(path, opts = {}) {
+      const key = document.getElementById("apiKey").value;
+      const headers = { ...(opts.headers || {}) };
+      if (key) headers["X-API-Key"] = key;
+      return fetch(path, { ...opts, headers });
+    }
+
     function toggleTheme() {
       const html = document.documentElement;
       html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
@@ -600,7 +608,7 @@
         records: collectMonthlyRecords(),
         allow_forged: true
       };
-      const res = await fetch("/underwrite/prove", {
+      const res = await api("/underwrite/prove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -617,7 +625,7 @@
         // Tamper with the first bit commitment response s0 of the DTI proof
         cloned.dti_proof.bit_proofs[0].s0 = "0x123456789abcdef";
       }
-      const ver = await fetch("/underwrite/verify", {
+      const ver = await api("/underwrite/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bundle: cloned })
@@ -692,7 +700,7 @@
         accounts,
         allow_forged: true
       };
-      const res = await fetch("/solvency/audit", {
+      const res = await api("/solvency/audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -722,7 +730,7 @@
     }
 
     async function loadBenchmark() {
-      const data = await fetch("/bench").then(r => r.json());
+      const data = await api("/bench").then(r => r.json());
       const s = data.summary;
       document.getElementById("benchComp").textContent = `${(s.completeness_rate * 100).toFixed(0)}% (${s.honest_verified}/${s.honest_total})`;
       document.getElementById("benchCheat").textContent = `${(s.cheating_acceptance_rate * 100).toFixed(0)}% (0/${s.cheating_attacks_total})`;
