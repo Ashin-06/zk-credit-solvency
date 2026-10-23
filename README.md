@@ -1,47 +1,70 @@
-# Project 12: Zero-Knowledge Credit Underwriting & Cryptographic Proof-of-Solvency Engine (`zkcredit`)
+# ZK Credit & Proof of Solvency (`zkcredit`)
 
-A zero-knowledge cryptographic engine for **Open Banking (Account Aggregator)** credit underwriting and **Neo-Bank Proof of Solvency**, built from first principles using **Pedersen Commitments**, **Cramer-Damgård-Schoenmakers (CDS) 1-of-2 OR-Sigma Bit-Decomposition Range Proofs**, and **Merkle-Sum Commitment Trees (MSCT)** over a 256-bit Safe Prime group.
+Two zero-knowledge checks a lender or regulator might want without seeing the underlying numbers:
 
----
+1. **Credit underwriting.** A borrower proves three policy predicates over 12 months of bank statements (annual net cashflow above a floor, debt-to-income under a cap, no month below a minimum end-of-day balance). The lender sees only Pedersen commitments, range proofs and the statement provider's signature.
+2. **Neo-bank proof of solvency.** A bank publishes a Merkle-sum tree of committed customer balances and proves its committed reserves cover the total. Each customer can check that their own balance is in the tree.
 
-## Cryptographic Architecture
+> **Reference implementation, not production cryptography.** The group arithmetic comes from libsodium, but the commitment scheme, range proofs, Fiat-Shamir transcripts and tree are hand-written and have not been independently reviewed. Scalar arithmetic uses Python integers, which are not constant-time. Treat it as a readable model of the protocols, not something to protect real money with.
 
-1. **Prime-Order Pedersen Commitment Group (`zkcredit/crypto.py`)**
-   - Safe prime $p = 2q + 1$ ($256$-bit $p$, $255$-bit Sophie Germain prime $q$).
-   - Independent generators $g, h \in \mathbb{G}_q$ of prime order $q$, where $h$ is derived via nothing-up-my-sleeve SHA-256 hash-to-group so $\log_g(h)$ is unknown.
-   - Homomorphic commitment $C(v, r) = g^v h^r \bmod p$:
-     $$C(v_1, r_1) \cdot C(v_2, r_2) \equiv C(v_1 + v_2, r_1 + r_2) \pmod p$$
-     $$C(v, r)^k \equiv C(k \cdot v, k \cdot r) \pmod p$$
-   - Fiat-Shamir non-interactive Schnorr proofs of opening $(v, r)$, zero-commitment opening, and commitment equality.
+## How it works
 
-2. **Bit-Decomposition CDS 1-of-2 OR-Sigma Range Proofs (`zkcredit/range_proof.py`)**
-   - Proves $v - \tau \in [0, 2^k)$ on the shifted commitment $C' = C(v, r) \cdot g^{-\tau} \bmod p$:
-     - Commits to each bit $b_j \in \{0, 1\}$ via $C_j = g^{b_j} h^{r_j} \bmod p$ with $\sum_{j=0}^{k-1} 2^j r_j \equiv r \pmod q$, ensuring $\prod_{j=0}^{k-1} C_j^{2^j} \equiv C' \pmod p$.
-     - Proves $b_j \in \{0, 1\}$ for every bit $j$ using a 1-of-2 Cramer-Damgård-Schoenmakers OR-Sigma proof via Fiat-Shamir.
+**Group.** Commitments live in the prime-order subgroup of Ed25519 (order L ≈ 2^252), using libsodium's point arithmetic through PyNaCl. g is the standard base point. h comes from a SHA-512 try-and-increment hash, so nobody knows log_g(h). PyNaCl 1.5's `is_valid_point` does not check subgroup membership, so every received point is also checked with L·P = 0. The tests check base-point multiplication against RFC 8032 test 1.
 
-3. **Zero-Knowledge Open-Banking Credit Underwriting (`zkcredit/underwrite.py`)**
-   - From 12 months of Account Aggregator attested commitments $(C(I_m), C(D_m), C(B_m))$, proves without revealing any Rupee values:
-     - **Annual Net Disposable Cashflow**: $\sum_{m=1}^{12} (I_m - D_m) \ge \tau_{\text{net}}$
-     - **Debt-to-Income Ratio Cap**: $100 \sum_{m=1}^{12} D_m \le \text{max\_dti\_pct} \cdot \sum_{m=1}^{12} I_m$ via a range proof on $C_{\text{income}}^{\text{max\_dti\_pct}} \cdot C_{\text{debt}}^{-100} \bmod p$
-     - **Zero Overdraft / EOD Floor**: $B_m \ge \tau_{\text{min}}$ for all $m \in \{1, \dots, 12\}$
+**Pedersen commitments.** C(v, r) = v·g + r·h, additively homomorphic. That is what lets the verifier rebuild annual totals, the DTI margin `max_dti_pct·ΣI − 100·ΣD`, tree nodes and the reserve surplus from the published commitments alone.
 
-4. **Merkle-Sum Commitment Tree Proof of Solvency (`zkcredit/solvency.py`)**
-   - Each customer leaf $i$ commits to balance $b_i \ge 0$ via $C_i = g^{b_i} h^{r_i} \bmod p$ + non-negativity range proof.
-   - Internal nodes homomorphically multiply commitments $C_{\text{parent}} = C_L \cdot C_R \bmod p$ up to $C_{\text{root}} = C(\sum b_i, \sum r_i)$.
-   - Bank proves $\text{Reserves} - \sum b_i \ge 0$ via a range proof on $C_{\text{reserves}} \cdot C_{\text{root}}^{-1} \bmod p$.
-   - Customers verify their $O(\log N)$ inclusion path and sibling non-negativity proofs without seeing any other customer's balance.
+**Range proofs** (`range_proof.py`). To prove v − τ ∈ [0, 2^k), the prover commits to each bit and gives a Cramer–Damgård–Schoenmakers 1-of-2 OR proof that each bit commitment opens to 0 or 1. The verifier checks that Σ 2^j·C_j equals the shifted commitment. Challenges are Fiat-Shamir SHA-512 hashes over typed, length-prefixed fields: the generators, the statement, the announcements and a context string with the applicant or bank ID. k is capped at 64; with 253 bits, a negative value mod L can be written as genuine bits (there is a test for that forgery).
 
----
+**Underwriting** (`underwrite.py`). The FIP (the bank holding the account) commits to each month's income, debt and minimum EOD balance and signs the applicant ID plus all 36 commitments with Ed25519. The lender checks that signature against an FIP key it already trusts, rebuilds the aggregates homomorphically and verifies 14 range proofs: net cashflow (28 bits), DTI margin (32 bits) and 12 EOD floors (24 bits each). Without the signature the bundle is rejected, because a borrower could otherwise commit to any numbers they like.
 
-## Quickstart
+**Solvency** (`solvency.py`). Each leaf commits to a balance in [0, 2^28) and is labelled with H(nonce ‖ user ID); the nonce is random per customer and given only to that customer. Internal nodes add their children's commitments and hash them. The bank commits to reserves R and proves R − L ≥ 0 on C_reserves − C_root (64-bit range). The auditor checks every leaf proof, rebuilds the tree and checks the surplus proof. A customer's inclusion proof (their balance, blinding and nonce, plus the sibling path with a 64-bit non-negativity proof per sibling) is private to them and kept out of the published bundle.
+
+## Results
+
+`python -m zkcredit bench` uses hand-written preset profiles, not real statements:
+
+| Case | Expected | Result |
+|---|---|---|
+| Prime salaried, profitable MSME | eligible | verified |
+| Solvent neo-bank (8 customers, ₹30L reserves vs ₹24L liabilities) | solvent | verified |
+| DTI 52.5% vs 40% cap, month-7 overdraft, cashflow below floor | ineligible | rejected |
+| ATK-01 swap in a commitment to a higher net cashflow | reject | rejected (aggregate mismatch) |
+| ATK-02 negative-balance leaf to hide liabilities | reject | rejected (leaf proof and inclusion path) |
+| ATK-03 / ATK-04 forged range proofs for the DTI and overdraft cases | reject | rejected |
+| ATK-05 one response scalar changed | reject | rejected |
+| ATK-06 borrower commits to invented figures and signs with their own key | reject | rejected (not the FIP's signature) |
+
+On this machine one credit bundle takes about 0.35 s to prove and 0.75 s to verify. It is 80,332 bytes in compact binary form (about 200 KB as the JSON the API returns). The 8-customer solvency bundle is 65,786 bytes. Timings vary by about ±15% between runs.
+
+The attack cases are fixed, fairly naive forgeries. Rejecting them shows the verifier checks what it should. It is not evidence of soundness, which rests on the standard security arguments for these protocols and on the code matching them.
+
+## Run it
 
 ```bash
-# Run test suite
-python -m pytest -q
-
-# Run completeness & soundness benchmark
-python -m zkcredit bench
-
-# Launch FastAPI server & interactive console on port 8012
-python -m zkcredit serve --port 8012
+pip install -r requirements.txt
+python -m pytest -q                       # 11 tests
+python -m zkcredit bench                  # the table above
+python -m zkcredit serve --port 8012      # API + console at http://127.0.0.1:8012
 ```
+
+| Endpoint | |
+|---|---|
+| `GET /health` | group parameters and the demo FIP public key |
+| `GET /presets` | preset borrowers and banks |
+| `POST /underwrite/prove` | build and check a credit bundle (the server plays FIP and borrower) |
+| `POST /underwrite/verify` | verify a bundle against the server's FIP key |
+| `POST /solvency/audit` | build and audit a solvency bundle; the sampled customer's inclusion proof comes back as a separate field |
+| `GET /bench` | the benchmark |
+
+Set `ZKCREDIT_API_KEY` to require it in the `X-API-Key` header on the POST endpoints and `/bench`; the console has a field for it. Without the key the server runs open, and `serve` refuses to bind a non-loopback address. Requests are capped at 1 MB and 64 accounts, and amounts at 10^12.
+
+## Limits
+
+- **Not reviewed.** See the note at the top. Before relying on any of it you would want an independent cryptographic review, or a move to an audited library (Bulletproofs or another vetted range-proof implementation, a Ristretto255 group).
+- **Range proofs are big and slow.** Bit-by-bit OR proofs cost 224 bytes per bit. Bulletproofs would shrink a 64-bit proof from about 14 KB to under 1 KB.
+- **Bit-length ceilings.** A borrower whose minimum EOD balance is more than about ₹1.67 crore above the floor, whose net cashflow exceeds the floor by more than about ₹26.8 crore, or whose DTI margin (`max_dti_pct × annual income − 100 × annual debt`) passes about ₹429 crore cannot produce a proof. A single bank customer can hold at most about ₹26.8 crore. All of these are constants in the code.
+- **The FIP integration is simulated.** The demo generates a fresh FIP key on each start and one process plays FIP, borrower and lender. There is no Account Aggregator / ReBIT integration and no FIP key distribution, and the borrower still chooses which account and which 12 months to submit.
+- **Reserves are self-declared.** The solvency proof shows that committed reserves cover committed liabilities. Nothing ties the reserve commitment to real assets; that needs a custodian or auditor attestation.
+- **Liabilities can be left out.** As with any Merkle-sum proof of liabilities, a bank can omit customers. Only customers who check their inclusion proofs would notice. The bundle also reveals the customer count.
+- **The demo server sees raw figures.** `/underwrite/prove` and `/solvency/audit` take the private inputs, which is fine for a demo. In real use the prover runs on the borrower's device or inside the bank.
+- **No deployment story**: no TLS, rate limiting, key management, persistence or audit logging.
