@@ -323,3 +323,29 @@ def test_api_key_and_input_limits(monkeypatch) -> None:
     assert client.post("/solvency/audit", json={"accounts": too_many}, headers=hdr).status_code == 422
     assert client.post("/underwrite/prove", content=b"x" * (api.MAX_BODY_BYTES + 1),
                        headers={**hdr, "Content-Type": "application/json"}).status_code == 413
+
+
+def test_group_matches_rfc8032_and_rejects_torsion() -> None:
+    import hashlib
+
+    import nacl.bindings as sodium
+
+    from zkcredit.crypto import is_prime_order_point
+
+    # RFC 8032 section 7.1, test 1: public key = clamp(SHA-512(secret)[:32]) * B
+    secret = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    h = bytearray(hashlib.sha512(secret).digest()[:32])
+    h[0] &= 248
+    h[31] &= 127
+    h[31] |= 64
+    s = int.from_bytes(h, "little")
+    expected = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+    assert DEFAULT_GROUP.mul(DEFAULT_GROUP.g, s).hex() == expected
+
+    # A prime-order point plus the order-2 point (0, -1) is on the curve and passes
+    # libsodium's is_valid_point in PyNaCl 1.5, but must not pass our check
+    order2 = bytes.fromhex("ec" + "ff" * 30 + "7f")
+    mixed = sodium.crypto_core_ed25519_add(DEFAULT_GROUP.h, order2)
+    assert sodium.crypto_core_ed25519_is_valid_point(mixed)
+    assert not is_prime_order_point(mixed)
+    assert is_prime_order_point(DEFAULT_GROUP.h)
