@@ -283,9 +283,9 @@
           <div class="card">
             <h2>
               <span>Borrower Private Financial Witness (12 Months)</span>
-              <span class="badge pass">Client-Side Private</span>
+              <span class="badge fail">Demo: sent to server</span>
             </h2>
-            <p class="subtext">Raw Rupee figures stay with the borrower. Only Pedersen commitments C(v, r) = v·g + r·h and zero-knowledge range proofs are transmitted to the lender.</p>
+            <p class="subtext">In this demo the server plays both the FIP and the borrower's wallet, so the figures below are posted to /underwrite/prove. In a real flow the FIP commits to and signs them, the borrower's device builds the proof, and the lender receives only Pedersen commitments C(v, r) = v·g + r·h, the FIP signature and the range proofs.</p>
 
             <div class="form-row">
               <div>
@@ -381,7 +381,7 @@
                 <select id="solvencyPreset" onchange="loadSolvencyPreset()"></select>
               </div>
               <div>
-                <label>Attested Liquid Reserves R (₹)</label>
+                <label>Liquid Reserves R (₹, self-declared)</label>
                 <input type="number" id="solvencyReserves" value="3000000" />
               </div>
               <div>
@@ -485,7 +485,7 @@
           <tbody id="benchProfilesBody"></tbody>
         </table>
 
-        <h2 style="margin-top: 22px;">2. Five Cryptographic Cheating & Forgery Attacks</h2>
+        <h2 style="margin-top: 22px;">2. Cheating & Forgery Attempts</h2>
         <table>
           <thead>
             <tr>
@@ -506,6 +506,10 @@
   <script>
     let PRESETS = { borrowers: {}, solvency: {} };
     let LAST_CREDIT_BUNDLE = null;
+
+    function esc(v) {
+      return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
 
     function api(path, opts = {}) {
       const key = document.getElementById("apiKey").value;
@@ -613,6 +617,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       }).then(r => r.json());
+      if (!res.bundle) {
+        document.getElementById("uwReason").textContent = "Error: " + JSON.stringify(res.detail);
+        return;
+      }
 
       LAST_CREDIT_BUNDLE = res.bundle;
       renderUnderwritingResult(res.bundle, res.verification);
@@ -630,6 +638,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bundle: cloned })
       }).then(r => r.json());
+      if (ver.verified === undefined) {
+        document.getElementById("uwReason").textContent = "Error: " + JSON.stringify(ver.detail);
+        return;
+      }
       renderUnderwritingResult(cloned, ver);
     }
 
@@ -674,7 +686,7 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>#${idx}</td>
-          <td><input type="text" class="s-uid" value="${a.user_id}" /></td>
+          <td><input type="text" class="s-uid" value="${esc(a.user_id)}" /></td>
           <td><input type="number" class="s-bal" value="${a.balance}" /></td>
         `;
         tbody.appendChild(tr);
@@ -705,6 +717,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       }).then(r => r.json());
+      if (!res.bundle) {
+        document.getElementById("solReason").textContent = "Error: " + JSON.stringify(res.detail);
+        return;
+      }
 
       const { bundle, audit } = res;
       const badge = document.getElementById("solVerdictBadge");
@@ -720,7 +736,7 @@
       const treeDiv = document.getElementById("solTreeLevels");
       treeDiv.innerHTML = `
         <div class="tree-level mono">
-          <strong>Root Hash:</strong> ${bundle.root_hash}<br/>
+          <strong>Root Hash:</strong> ${esc(bundle.root_hash)}<br/>
           <strong>C_total_liabilities:</strong> ${bundle.c_total_liabilities.slice(0, 34)}...<br/>
           <strong>C_reserves:</strong>          ${bundle.c_reserves.slice(0, 34)}...<br/>
           <strong>C_surplus (R - L):</strong>   ${bundle.c_surplus.slice(0, 34)}...
@@ -731,9 +747,11 @@
 
     async function loadBenchmark() {
       const data = await api("/bench").then(r => r.json());
+      if (!data.summary) return;
       const s = data.summary;
+      const accepted = s.cheating_attacks_total - s.cheating_attacks_rejected;
       document.getElementById("benchComp").textContent = `${(s.completeness_rate * 100).toFixed(0)}% (${s.honest_verified}/${s.honest_total})`;
-      document.getElementById("benchCheat").textContent = `${(s.cheating_acceptance_rate * 100).toFixed(0)}% (0/${s.cheating_attacks_total})`;
+      document.getElementById("benchCheat").textContent = `${(s.cheating_acceptance_rate * 100).toFixed(0)}% (${accepted}/${s.cheating_attacks_total})`;
       document.getElementById("benchLatency").textContent = `${s.avg_prove_ms} / ${s.avg_verify_ms} ms`;
       document.getElementById("benchSize").textContent = `${s.credit_proof_size_bytes.toLocaleString()} B`;
 
@@ -743,13 +761,13 @@
         const tr = document.createElement("tr");
         const correct = c.verified === c.expected_eligible;
         tr.innerHTML = `
-          <td class="mono">${c.applicant_id}</td>
-          <td>${c.label}</td>
+          <td class="mono">${esc(c.applicant_id)}</td>
+          <td>${esc(c.label)}</td>
           <td>${c.expected_eligible ? "Eligible" : "Ineligible"}</td>
           <td><span class="badge ${correct ? "pass" : "fail"}">${c.verified ? "VERIFIED" : "REJECTED"}</span></td>
           <td>${c.proof_size_bytes.toLocaleString()} B</td>
           <td>${c.prove_ms} ms / ${c.verify_ms} ms</td>
-          <td>${c.reason}</td>
+          <td>${esc(c.reason)}</td>
         `;
         pBody.appendChild(tr);
       }
@@ -759,12 +777,12 @@
       for (const a of data.cheating_attacks) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td class="mono"><strong>${a.attack_id}</strong></td>
-          <td>${a.name}</td>
-          <td>${a.target}</td>
+          <td class="mono"><strong>${esc(a.attack_id)}</strong></td>
+          <td>${esc(a.name)}</td>
+          <td>${esc(a.target)}</td>
           <td><span class="badge ${a.rejected ? "pass" : "fail"}">${a.rejected ? "REJECTED (SOUND)" : "ACCEPTED"}</span></td>
           <td>${a.verify_ms} ms</td>
-          <td>${a.detection_reason}</td>
+          <td>${esc(a.detection_reason)}</td>
         `;
         aBody.appendChild(tr);
       }
