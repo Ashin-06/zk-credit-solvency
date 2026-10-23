@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     cmd = args.command or "bench"
 
     if cmd == "bench":
+        # The report prints the rupee sign, which a cp1252 Windows console cannot encode
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         report = run_benchmark()
         if getattr(args, "json", False):
             print(json.dumps(report, indent=2))
