@@ -263,3 +263,23 @@ def test_range_proof_rejects_modular_wraparound() -> None:
     forged = RangeProof(commitment=c, shifted_commitment=c, lower_bound=0, bit_length=k,
                         bit_proofs=bit_proofs, context="wrap")
     assert not verify_range(forged, expected_commitment=c, context="wrap")
+
+
+def test_solvency_scales_and_keeps_customers_private() -> None:
+    # 64 customers of 2 Cr each: subtree sums and the surplus exceed 2^28
+    accounts = [CustomerAccount(f"cust_{i}", 20_000_000) for i in range(64)]
+    bundle = build_solvency_proof("BIG-BANK", accounts, 1_300_000_000, sample_user_index=5)
+    assert verify_solvency_audit(bundle).verified
+
+    public = str(bundle.to_dict())
+    assert "cust_" not in public
+    assert hex(bundle.sample_inclusion_proof.leaf_blinding) not in public
+    # Leaf IDs are salted per customer, so an unsalted guess matches nothing
+    import hashlib
+    guess = hashlib.sha256(b"zkcredit.neobank.v1|cust_5").hexdigest()
+    assert guess not in public
+
+    # A path whose sibling sides disagree with the leaf index is rejected
+    proof = bundle.sample_inclusion_proof
+    flipped = replace(proof, path=[replace(proof.path[0], sibling_position="R")] + proof.path[1:])
+    assert not verify_customer_inclusion(flipped, bundle.root_hash, bundle.c_total_liabilities, "BIG-BANK")

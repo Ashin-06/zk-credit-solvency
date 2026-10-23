@@ -236,6 +236,9 @@ def solvency_audit(req: SolvencyAuditRequest) -> Dict[str, Any]:
     return {
         "bundle": bundle.to_dict(),
         "audit": audit.to_dict(),
+        # Private to the sampled customer (balance, blinding, nonce); the demo returns it
+        # here so the console can show what that customer would check.
+        "customer_inclusion_proof": bundle.sample_inclusion_proof.to_dict(),
     }
 
 

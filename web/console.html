@@ -718,7 +718,7 @@
           <strong>C_surplus (R - L):</strong>   ${bundle.c_surplus.slice(0, 34)}...
         </div>
       `;
-      document.getElementById("solInclusionJson").textContent = JSON.stringify(bundle.sample_inclusion_proof, null, 2);
+      document.getElementById("solInclusionJson").textContent = JSON.stringify(res.customer_inclusion_proof, null, 2);
     }
 
     async function loadBenchmark() {

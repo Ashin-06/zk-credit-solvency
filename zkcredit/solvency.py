@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence
@@ -33,12 +34,16 @@ from .range_proof import (
     verify_range,
 )
 
-SOLVENCY_BIT_LENGTH = 28  # Supports individual and aggregate balances up to ~26.8 Crore INR
+SOLVENCY_BIT_LENGTH = 28  # Per-customer balances up to ~26.8 Crore INR
+SUM_BIT_LENGTH = 64  # Subtree sums and the reserve surplus; a real bank's totals exceed 2^28
 
 
-def compute_user_hash(user_id: str, salt: str = "zkcredit.neobank.v1") -> str:
-    """Computes privacy-preserving leaf identifier hash H(salt || user_id)."""
-    return hashlib.sha256(f"{salt}|{user_id}".encode("utf-8")).hexdigest()
+def compute_user_hash(user_id: str, nonce: str) -> str:
+    """
+    Leaf identifier H(nonce || user_id). The nonce is random per customer and per audit and is
+    given only to that customer, so nobody can match leaves to guessed or leaked user IDs.
+    """
+    return hashlib.sha256(f"zkcredit.neobank.v2|{nonce}|{user_id}".encode("utf-8")).hexdigest()
 
 
 def compute_leaf_hash(user_hash: str, commitment: bytes) -> str:
@@ -154,6 +159,7 @@ class CustomerInclusionProof:
     """
 
     user_id: str
+    user_nonce: str
     user_hash: str
     leaf_index: int
     claimed_balance: int
@@ -168,6 +174,7 @@ class CustomerInclusionProof:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "user_id": self.user_id,
+            "user_nonce": self.user_nonce,
             "user_hash": self.user_hash,
             "leaf_index": self.leaf_index,
             "claimed_balance": self.claimed_balance,
@@ -195,8 +202,11 @@ class _InternalTreeNode:
 @dataclass(frozen=True)
 class SolvencyProofBundle:
     """
-    Public Neo-Bank Proof-of-Solvency bundle containing the Merkle-Sum Commitment Tree,
+    Neo-Bank Proof-of-Solvency bundle containing the Merkle-Sum Commitment Tree,
     leaf non-negativity range proofs, reserve commitment, and zero-knowledge surplus proof.
+
+    `sample_inclusion_proof` holds one customer's balance, blinding and nonce. It belongs to
+    that customer only, so `to_dict()` (the publishable part) leaves it out.
     """
 
     bank_id: str
@@ -235,7 +245,6 @@ class SolvencyProofBundle:
                 [c.hex() for c in level] for level in self.tree_levels_commitments
             ],
             "reserve_surplus_proof": self.reserve_surplus_proof.to_dict(),
-            "sample_inclusion_proof": self.sample_inclusion_proof.to_dict(),
             "generation_ms": round(self.generation_ms, 3),
             "total_proof_bytes": self.total_proof_bytes(),
         }
@@ -301,9 +310,10 @@ def build_solvency_proof(
     leaves: List[LeafCommitmentNode] = []
     level0_nodes: List[_InternalTreeNode] = []
     leaf_blindings: List[int] = []
+    nonces = [secrets.token_hex(16) for _ in padded_accounts]
 
     for i, acct in enumerate(padded_accounts):
-        u_hash = compute_user_hash(acct.user_id)
+        u_hash = compute_user_hash(acct.user_id, nonces[i])
         c_i, r_i = group.commit(acct.balance)
         leaf_blindings.append(r_i)
         l_hash = compute_leaf_hash(u_hash, c_i)
@@ -405,7 +415,7 @@ def build_solvency_proof(
             blinding=r_surplus,
             commitment=c_surplus,
             lower_bound=0,
-            bit_length=bit_length,
+            bit_length=SUM_BIT_LENGTH,
             context=surplus_ctx,
             group=group,
         )
@@ -414,7 +424,7 @@ def build_solvency_proof(
             actual_value=surplus_val,
             blinding=r_surplus,
             lower_bound=0,
-            bit_length=bit_length,
+            bit_length=SUM_BIT_LENGTH,
             context=surplus_ctx,
             group=group,
         )
@@ -444,7 +454,7 @@ def build_solvency_proof(
                 blinding=sib_node.blinding_sum,
                 commitment=sib_node.commitment,
                 lower_bound=0,
-                bit_length=bit_length,
+                bit_length=SUM_BIT_LENGTH,
                 context=sib_ctx,
                 group=group,
             )
@@ -453,7 +463,7 @@ def build_solvency_proof(
                 actual_value=sib_node.balance_sum,
                 blinding=sib_node.blinding_sum,
                 lower_bound=0,
-                bit_length=bit_length,
+                bit_length=SUM_BIT_LENGTH,
                 context=sib_ctx,
                 group=group,
             )
@@ -477,6 +487,7 @@ def build_solvency_proof(
     target_leaf = leaves[target_idx]
     inclusion_proof = CustomerInclusionProof(
         user_id=target_acct.user_id,
+        user_nonce=nonces[target_idx],
         user_hash=target_leaf.user_hash,
         leaf_index=target_idx,
         claimed_balance=target_acct.balance,
@@ -521,7 +532,7 @@ def verify_customer_inclusion(
     proofs without accessing any other customer's leaf or balance.
     """
     # 1. Verify customer's own leaf opening and hash
-    if compute_user_hash(proof.user_id) != proof.user_hash:
+    if compute_user_hash(proof.user_id, proof.user_nonce) != proof.user_hash:
         return False
     if not group.verify_opening(proof.leaf_commitment, proof.claimed_balance, proof.leaf_blinding):
         return False
@@ -544,14 +555,17 @@ def verify_customer_inclusion(
     curr_comm = proof.leaf_commitment
     curr_idx = proof.leaf_index
 
-    for step in proof.path:
+    for level, step in enumerate(proof.path):
+        # The leaf index fixes which side each sibling is on; don't take the prover's word for it
+        if step.level != level or step.sibling_position != ("L" if curr_idx % 2 else "R"):
+            return False
         sib_idx = curr_idx - 1 if step.sibling_position == "L" else curr_idx + 1
         sib_ctx = f"{bank_id}|sibling_L{step.level}_I{sib_idx}|{step.sibling_hash}"
         if not verify_range(
             proof=step.sibling_nonneg_proof,
             expected_commitment=step.sibling_commitment,
             expected_lower_bound=0,
-            expected_bit_length=bit_length,
+            expected_bit_length=SUM_BIT_LENGTH,
             context=sib_ctx,
             group=group,
         ):
@@ -603,7 +617,7 @@ def verify_solvency_audit(
     curr_comms: List[bytes] = []
 
     for i, leaf in enumerate(bundle.leaves):
-        if leaf.leaf_index != i:
+        if leaf.leaf_index != i or not group.is_valid_element(leaf.commitment):
             invalid_leaves.append(i)
             continue
         expected_l_hash = compute_leaf_hash(leaf.user_hash, leaf.commitment)
@@ -627,7 +641,10 @@ def verify_solvency_audit(
     all_leaves_ok = len(invalid_leaves) == 0 and len(bundle.leaves) == bundle.padded_leaves_count
 
     # Recompute Merkle-Sum Commitment Tree up to the root
-    tree_ok = len(curr_comms) > 0 and (len(curr_comms) & (len(curr_comms) - 1)) == 0
+    tree_ok = (
+        len(curr_comms) == len(bundle.leaves) > 0
+        and (len(curr_comms) & (len(curr_comms) - 1)) == 0
+    )
     if tree_ok:
         while len(curr_comms) > 1:
             next_hashes: List[str] = []
@@ -650,15 +667,16 @@ def verify_solvency_audit(
         )
 
     # Check reserve surplus commitment and range proof (Reserves - Liabilities >= 0)
-    expected_surplus_comm = group.sub_commitments(bundle.c_reserves, bundle.c_total_liabilities)
     surplus_ctx = f"{bundle.bank_id}|reserve_surplus|{bundle.root_hash}"
     surplus_ok = (
-        bundle.c_surplus == expected_surplus_comm
+        tree_ok
+        and group.is_valid_element(bundle.c_reserves)
+        and bundle.c_surplus == group.sub_commitments(bundle.c_reserves, bundle.c_total_liabilities)
         and verify_range(
             proof=bundle.reserve_surplus_proof,
-            expected_commitment=expected_surplus_comm,
+            expected_commitment=bundle.c_surplus,
             expected_lower_bound=0,
-            expected_bit_length=bit_length,
+            expected_bit_length=SUM_BIT_LENGTH,
             context=surplus_ctx,
             group=group,
         )
