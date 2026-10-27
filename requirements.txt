@@ -5,3 +5,6 @@ httpx>=0.25.0
 pytest>=7.4.0
 pynacl>=1.5.0
 cryptography>=41.0
+sqlalchemy>=2.0
+psycopg[binary]>=3.2   # only used with a postgresql:// ZKCREDIT_DATABASE_URL
+prometheus-client>=0.20
