@@ -1,7 +1,8 @@
 """
 CLI Entrypoint for `zkcredit`:
   python -m zkcredit bench
-  python -m zkcredit serve --port 8012
+  python -m zkcredit serve       (settings: ZKCREDIT_* environment variables)
+  python -m zkcredit migrate     (apply database migrations and exit)
 """
 
 from __future__ import annotations
@@ -10,8 +11,6 @@ import argparse
 import json
 import os
 import sys
-
-import uvicorn
 
 from .bench import format_benchmark_table, run_benchmark
 
@@ -27,8 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     bench_p.add_argument("--json", action="store_true", help="Output benchmark report as JSON")
 
     serve_p = sub.add_parser("serve", help="Run FastAPI server")
-    serve_p.add_argument("--host", default="127.0.0.1", help="Host address (default: 127.0.0.1)")
-    serve_p.add_argument("--port", type=int, default=8012, help="Port number (default: 8012)")
+    serve_p.add_argument("--host", help="Host address (default ZKCREDIT_HOST or 127.0.0.1; others need API keys)")
+    serve_p.add_argument("--port", type=int, help="Port number (default ZKCREDIT_PORT or 8012)")
+    sub.add_parser("migrate", help="Apply database migrations to ZKCREDIT_DATABASE_URL")
 
     args = parser.parse_args(argv)
     cmd = args.command or "bench"
@@ -46,11 +46,28 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    if cmd == "serve":
-        if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("ZKCREDIT_API_KEY"):
-            print("Refusing to listen on a non-loopback address without ZKCREDIT_API_KEY set.", file=sys.stderr)
+    if cmd in ("serve", "migrate"):
+        from . import db, ops
+
+        for name, val in (("HOST", getattr(args, "host", None)), ("PORT", getattr(args, "port", None))):
+            if val is not None:
+                os.environ[f"ZKCREDIT_{name}"] = str(val)
+        try:
+            settings = ops.load_settings()  # fail here, before uvicorn, with a readable message
+        except ops.ConfigError as e:
+            print(f"configuration error: {e}", file=sys.stderr)
             return 2
-        uvicorn.run("zkcredit.api:app", host=args.host, port=args.port, reload=False)
+        if cmd == "migrate":
+            print(*(db.migrate(db.engine(settings.database_url)) or ["up to date"]), sep="\n")
+            return 0
+        import uvicorn
+
+        ops.setup_logging(settings.log_level)
+        try:
+            uvicorn.run("zkcredit.api:app", host=settings.host, port=settings.port, log_config=None, access_log=False)
+        except ops.ConfigError as e:  # raised while importing the app: unreviewed-crypto consent, FIP key
+            print(f"configuration error: {e}", file=sys.stderr)
+            return 2
         return 0
 
     parser.print_help()

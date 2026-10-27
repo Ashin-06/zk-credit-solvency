@@ -235,9 +235,10 @@ def test_fastapi_endpoints() -> None:
     assert r_root.status_code == 200
     assert "ZKCredit" in r_root.text
 
-    r_health = client.get("/health")
-    assert r_health.status_code == 200
-    assert r_health.json()["group"]["name"] == "ed25519"
+    assert client.get("/healthz").status_code == 200
+    r_params = client.get("/params")
+    assert r_params.status_code == 200
+    assert r_params.json()["group"]["name"] == "ed25519"
 
     r_prove = client.post("/underwrite/prove", json={"preset_key": "prime_salaried"})
     assert r_prove.status_code == 200
@@ -301,13 +302,17 @@ def test_solvency_scales_and_keeps_customers_private() -> None:
 
 
 def test_api_key_and_input_limits(monkeypatch) -> None:
+    import importlib
+    import json
+
     import zkcredit.api as api
 
-    client = TestClient(app)
-    monkeypatch.setattr(api, "API_KEY", "s3cret")
+    monkeypatch.setenv("ZKCREDIT_API_KEYS", json.dumps({"s3cret": {"user": "ops", "role": "admin"}}))
+    api = importlib.reload(api)
+    client = TestClient(api.app)
     assert client.post("/underwrite/prove", json={"preset_key": "prime_salaried"}).status_code == 401
     assert client.get("/bench").status_code == 401
-    assert client.get("/health").status_code == 200
+    assert client.get("/healthz").status_code == 200
 
     hdr = {"X-API-Key": "s3cret"}
     ok = client.post("/underwrite/prove", json={"preset_key": "prime_salaried"}, headers=hdr)
@@ -321,7 +326,7 @@ def test_api_key_and_input_limits(monkeypatch) -> None:
 
     too_many = [{"user_id": f"u{i}", "balance": 1} for i in range(api.MAX_ACCOUNTS + 1)]
     assert client.post("/solvency/audit", json={"accounts": too_many}, headers=hdr).status_code == 422
-    assert client.post("/underwrite/prove", content=b"x" * (api.MAX_BODY_BYTES + 1),
+    assert client.post("/underwrite/prove", content=b"x" * (api.settings.max_body_bytes + 1),
                        headers={**hdr, "Content-Type": "application/json"}).status_code == 413
 
 
@@ -342,10 +347,10 @@ def test_group_matches_rfc8032_and_rejects_torsion() -> None:
     expected = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
     assert DEFAULT_GROUP.mul(DEFAULT_GROUP.g, s).hex() == expected
 
-    # A prime-order point plus the order-2 point (0, -1) is on the curve and passes
-    # libsodium's is_valid_point in PyNaCl 1.5, but must not pass our check
+    # A prime-order point plus the order-2 point (0, -1) is on the curve. libsodium's
+    # is_valid_point accepts it in PyNaCl 1.5 (newer libsodium rejects it); our check must
+    # reject it either way.
     order2 = bytes.fromhex("ec" + "ff" * 30 + "7f")
     mixed = sodium.crypto_core_ed25519_add(DEFAULT_GROUP.h, order2)
-    assert sodium.crypto_core_ed25519_is_valid_point(mixed)
     assert not is_prime_order_point(mixed)
     assert is_prime_order_point(DEFAULT_GROUP.h)

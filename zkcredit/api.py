@@ -3,29 +3,35 @@ FastAPI Service for Zero-Knowledge Credit Underwriting & Neo-Bank Proof of Solve
 
 Endpoints:
 - GET  /                  -> Interactive dark/light web console (web/console.html)
-- GET  /health            -> Service health & group parameters
+- GET  /healthz, /readyz  -> Liveness and readiness; GET /metrics -> Prometheus [metrics]
+- GET  /params            -> Group parameters and the FIP public key in use
 - GET  /presets           -> Preset borrower & neo-bank solvency configurations
-- POST /underwrite/prove  -> Generate a zero-knowledge CreditProofBundle from 12-month records
-- POST /underwrite/verify -> Verify a CreditProofBundle using only public commitments & thresholds
-- POST /solvency/audit    -> Build & audit a Merkle-Sum Commitment Tree Proof-of-Solvency
-- GET  /bench             -> Run completeness, soundness, proof-size & latency benchmark
+- POST /underwrite/prove  -> Generate a CreditProofBundle, simulating the FIP (development only) [prove]
+- POST /underwrite/verify -> Verify a CreditProofBundle against the pinned FIP key; recorded [verify]
+- GET  /underwrite/verifications[/{id}] -> Recorded verifications [read]
+- POST /solvency/audit    -> Build & audit a Merkle-Sum Proof-of-Solvency; published [solvency]
+- GET  /solvency/audits[/{id}] -> Published proofs of solvency and their roots [read]
+- GET  /bench             -> Run completeness, soundness, proof-size & latency benchmark [bench]
 
-Set ZKCREDIT_API_KEY to require it in the X-API-Key header on the POST endpoints and /bench
-(unset = open, for local use; `python -m zkcredit serve` refuses a non-loopback host without it).
+The zero-knowledge protocols here are hand-written and have NOT been reviewed by a
+cryptographer. Production mode refuses to start unless ZKCREDIT_ACCEPT_UNREVIEWED_CRYPTO=yes,
+and needs ZKCREDIT_FIP_PUBLIC_KEY (the FIP's Ed25519 key, 64 hex). Callers send an API key whose
+role decides the permissions in brackets; see ops.py and docs/runbook.md.
 """
 
 from __future__ import annotations
 
-import hmac
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from . import db, ops
 from .bench import get_borrower_presets, get_solvency_presets, run_benchmark
 from .crypto import DEFAULT_GROUP
 from .solvency import (
@@ -40,6 +46,30 @@ from .underwrite import (
     generate_credit_proof,
     verify_credit_proof,
 )
+from .store import ProofStore
+
+settings = ops.load_settings()
+ops.setup_logging(settings.log_level)
+UNREVIEWED = ("zkcredit's range proofs, OR-proofs and Merkle-sum solvency proofs are hand-written and have not "
+              "been reviewed by a cryptographer")
+if settings.production and os.environ.get("ZKCREDIT_ACCEPT_UNREVIEWED_CRYPTO", "").strip().lower() != "yes":
+    raise ops.ConfigError(UNREVIEWED + "; set ZKCREDIT_ACCEPT_UNREVIEWED_CRYPTO=yes to run anyway")
+ops.log.warning(UNREVIEWED)
+
+_FIP_HEX = os.environ.get("ZKCREDIT_FIP_PUBLIC_KEY", "").strip().lower()
+if settings.production and not _FIP_HEX:
+    raise ops.ConfigError("production needs ZKCREDIT_FIP_PUBLIC_KEY: the FIP's Ed25519 public key (64 hex)")
+if _FIP_HEX:
+    if not re.fullmatch(r"[0-9a-f]{64}", _FIP_HEX):
+        raise ops.ConfigError("ZKCREDIT_FIP_PUBLIC_KEY must be 64 hex characters")
+    FIP_KEY = None  # the FIP signs; the lender only verifies
+    FIP_PUBLIC_KEY = Ed25519PublicKey.from_public_bytes(bytes.fromhex(_FIP_HEX))
+else:
+    # Demo FIP signing key, new on every start (development only).
+    FIP_KEY = Ed25519PrivateKey.generate()
+    FIP_PUBLIC_KEY = FIP_KEY.public_key()
+
+store = ProofStore(db.connect(settings.database_url))
 
 app = FastAPI(
     title="ZKCredit: Zero-Knowledge Credit Underwriting & Proof-of-Solvency Engine",
@@ -50,29 +80,17 @@ app = FastAPI(
     ),
 )
 
+ops.install(app, settings, {"database": lambda: store.db.connect().close()})
+
 _CONSOLE_PATH = Path(__file__).resolve().parent.parent / "web" / "console.html"
-API_KEY = os.environ.get("ZKCREDIT_API_KEY")
-MAX_BODY_BYTES = 1_000_000  # a full credit bundle is about 200 KB of JSON
 MAX_ACCOUNTS = 64  # each leaf costs a range proof; this keeps one request to a few seconds
 MAX_AMOUNT = 10**12  # rupees; anything larger is a typo or an attempt to burn CPU
 
 
-def require_key(x_api_key: str | None = Header(default=None)) -> None:
-    if API_KEY and not hmac.compare_digest(x_api_key or "", API_KEY):
-        raise HTTPException(401, "missing or wrong X-API-Key")
 
-
-@app.middleware("http")
-async def limit_body(request: Request, call_next):
-    if request.method == "POST":
-        length = request.headers.get("content-length", "")
-        if not length.isdigit() or int(length) > MAX_BODY_BYTES:
-            return JSONResponse({"detail": "body missing Content-Length or over 1 MB"}, status_code=413)
-    return await call_next(request)
-
-# Demo FIP signing key, new on every start. A real lender pins the FIPs' published keys.
-FIP_KEY = Ed25519PrivateKey.generate()
-FIP_PUBLIC_KEY = FIP_KEY.public_key()
+def _no_demo_in_production(allow_forged: bool) -> None:
+    if allow_forged and settings.production:
+        raise HTTPException(403, "forged-proof demos are disabled in production")
 
 
 class MonthlyRecordInput(BaseModel):
@@ -122,12 +140,10 @@ def index() -> HTMLResponse:
     return HTMLResponse("<h1>ZKCredit Console not found</h1>", status_code=404)
 
 
-@app.get("/health")
-def health() -> Dict[str, Any]:
+@app.get("/params", dependencies=[Depends(ops.require("read"))])
+def params() -> Dict[str, Any]:
     return {
-        "status": "ok",
-        "service": "zkcredit",
-        "port": 8012,
+        "crypto_review": "none: " + UNREVIEWED,
         "group": {
             "name": DEFAULT_GROUP.name,
             "subgroup_bits": DEFAULT_GROUP.q.bit_length(),
@@ -135,11 +151,12 @@ def health() -> Dict[str, Any]:
             "g": DEFAULT_GROUP.g.hex(),
             "h": DEFAULT_GROUP.h.hex(),
         },
-        "demo_fip_public_key": FIP_PUBLIC_KEY.public_bytes_raw().hex(),
+        "fip_public_key": FIP_PUBLIC_KEY.public_bytes_raw().hex(),
+        "fip_key_source": "pinned (ZKCREDIT_FIP_PUBLIC_KEY)" if FIP_KEY is None else "demo key made at start-up",
     }
 
 
-@app.get("/presets")
+@app.get("/presets", dependencies=[Depends(ops.require("read"))])
 def presets() -> Dict[str, Any]:
     b_presets = get_borrower_presets()
     s_presets = get_solvency_presets()
@@ -167,8 +184,10 @@ def presets() -> Dict[str, Any]:
     }
 
 
-@app.post("/underwrite/prove", dependencies=[Depends(require_key)])
+@app.post("/underwrite/prove", dependencies=[Depends(ops.require("prove"))])
 def underwrite_prove(req: UnderwriteProveRequest) -> Dict[str, Any]:
+    if FIP_KEY is None:
+        raise HTTPException(403, "proving simulates the FIP's signature; it is not available with a pinned FIP key")
     b_presets = get_borrower_presets()
     if req.preset_key and req.preset_key in b_presets:
         preset = b_presets[req.preset_key]
@@ -214,12 +233,12 @@ def underwrite_prove(req: UnderwriteProveRequest) -> Dict[str, Any]:
     }
 
 
-@app.post("/underwrite/verify", dependencies=[Depends(require_key)])
-def underwrite_verify(req: UnderwriteVerifyRequest) -> Dict[str, Any]:
+@app.post("/underwrite/verify")
+def underwrite_verify(req: UnderwriteVerifyRequest, ident: dict = Depends(ops.require("verify"))) -> Dict[str, Any]:
     try:
         bundle = CreditProofBundle.from_dict(req.bundle)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid CreditProofBundle: {exc}") from exc
+    except Exception:  # any malformed field: say so without echoing it
+        raise HTTPException(status_code=400, detail="invalid CreditProofBundle") from None
 
     expected_policy = None
     if req.expected_policy is not None:
@@ -229,12 +248,15 @@ def underwrite_verify(req: UnderwriteVerifyRequest) -> Dict[str, Any]:
             min_monthly_eod_balance=req.expected_policy.min_monthly_eod_balance,
         )
 
-    result = verify_credit_proof(bundle, expected_policy=expected_policy, fip_public_key=FIP_PUBLIC_KEY)
-    return result.to_dict()
+    result = verify_credit_proof(bundle, expected_policy=expected_policy, fip_public_key=FIP_PUBLIC_KEY).to_dict()
+    ops.DECISIONS.labels(decision="credit_verified" if result["verified"] else "credit_rejected").inc()
+    result["verification_id"] = store.record_verification(ident["user"] or "demo", result, bundle.to_dict())
+    return result
 
 
-@app.post("/solvency/audit", dependencies=[Depends(require_key)])
-def solvency_audit(req: SolvencyAuditRequest) -> Dict[str, Any]:
+@app.post("/solvency/audit")
+def solvency_audit(req: SolvencyAuditRequest, ident: dict = Depends(ops.require("solvency"))) -> Dict[str, Any]:
+    _no_demo_in_production(req.allow_forged)
     s_presets = get_solvency_presets()
     if req.preset_key and req.preset_key in s_presets:
         preset = s_presets[req.preset_key]
@@ -262,16 +284,46 @@ def solvency_audit(req: SolvencyAuditRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    audit = verify_solvency_audit(bundle)
+    audit = verify_solvency_audit(bundle).to_dict()
+    ops.DECISIONS.labels(decision="solvency_verified" if audit["verified"] else "solvency_rejected").inc()
+    public = bundle.to_dict()
     return {
-        "bundle": bundle.to_dict(),
-        "audit": audit.to_dict(),
+        "audit_id": store.record_audit(ident["user"] or "demo", audit, public),
+        "bundle": public,
+        "audit": audit,
         # Private to the sampled customer (balance, blinding, nonce); the demo returns it
         # here so the console can show what that customer would check.
         "customer_inclusion_proof": bundle.sample_inclusion_proof.to_dict(),
     }
 
 
-@app.get("/bench", dependencies=[Depends(require_key)])
+@app.get("/underwrite/verifications", dependencies=[Depends(ops.require("read"))])
+def list_verifications(applicant_id: Optional[str] = Query(None, max_length=64),
+                       limit: int = Query(50, ge=1, le=1000)) -> Dict[str, Any]:
+    return {"verifications": store.summaries("credit_verifications", applicant_id, limit)}
+
+
+@app.get("/underwrite/verifications/{ref}", dependencies=[Depends(ops.require("read"))])
+def get_verification(ref: str) -> Dict[str, Any]:
+    row = store.get("credit_verifications", ref[:64])
+    if row is None:
+        raise HTTPException(404, "verification not found")
+    return row
+
+
+@app.get("/solvency/audits", dependencies=[Depends(ops.require("read"))])
+def list_audits(bank_id: Optional[str] = Query(None, max_length=64), limit: int = Query(50, ge=1, le=1000)) -> Dict[str, Any]:
+    return {"audits": store.summaries("solvency_audits", bank_id, limit)}
+
+
+@app.get("/solvency/audits/{ref}", dependencies=[Depends(ops.require("read"))])
+def get_audit(ref: str) -> Dict[str, Any]:
+    row = store.get("solvency_audits", ref[:64])
+    if row is None:
+        raise HTTPException(404, "audit not found")
+    return row
+
+
+@app.get("/bench", dependencies=[Depends(ops.require("bench"))])
 def bench() -> Dict[str, Any]:
     return run_benchmark()
