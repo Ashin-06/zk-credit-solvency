@@ -41,22 +41,33 @@ The attack cases are fixed, fairly naive forgeries. Rejecting them shows the ver
 ## Run it
 
 ```bash
-pip install -r requirements.txt
-python -m pytest -q                       # 11 tests
+pip install -r requirements.txt           # or: pip install -r requirements-dev.lock && pip install -e .
+python -m pytest -q                       # 21 tests
 python -m zkcredit bench                  # the table above
-python -m zkcredit serve --port 8012      # API + console at http://127.0.0.1:8012
+python -m zkcredit serve                  # API + console at http://127.0.0.1:8012 (demo FIP key, open, loopback only)
+docker build -t zk-credit-solvency .      # production image; see docs/runbook.md
 ```
 
 | Endpoint | |
 |---|---|
-| `GET /health` | group parameters and the demo FIP public key |
+| `GET /params` | group parameters, the FIP public key in use, and the review status of the cryptography |
 | `GET /presets` | preset borrowers and banks |
-| `POST /underwrite/prove` | build and check a credit bundle (the server plays FIP and borrower) |
-| `POST /underwrite/verify` | verify a bundle against the server's FIP key |
-| `POST /solvency/audit` | build and audit a solvency bundle; the sampled customer's inclusion proof comes back as a separate field |
-| `GET /bench` | the benchmark |
+| `POST /underwrite/prove` | build and check a credit bundle; the server plays FIP and borrower, so this is development only |
+| `POST /underwrite/verify` | verify a bundle against the pinned FIP key; every verification is recorded |
+| `GET /underwrite/verifications[/{id}]` | recorded verifications |
+| `POST /solvency/audit` | build, audit and publish a solvency bundle; the sampled customer's inclusion proof comes back as a separate field and is not stored |
+| `GET /solvency/audits[/{id}]` | published proofs of solvency and the roots customers check against |
+| `GET /bench` | the benchmark (admin only: slow) |
+| `GET /healthz`, `/readyz`, `/metrics` | liveness, readiness, Prometheus metrics |
 
-Set `ZKCREDIT_API_KEY` to require it in the `X-API-Key` header on the POST endpoints and `/bench`; the console has a field for it. Without the key the server runs open, and `serve` refuses to bind a non-loopback address. Requests are capped at 1 MB and 64 accounts, and amounts at 10^12.
+Each caller gets an API key with a role: `lender` verifies and reads, `bank` publishes proofs of solvency and reads, `viewer` reads, `applicant` may use the development-only prover, and `monitor` scrapes metrics. Make one with `python -m zkcredit.ops keygen` and list its hash in `ZKCREDIT_API_KEYS` or `ZKCREDIT_KEYS_FILE`. Without keys the server runs open and refuses to bind a non-loopback address. Requests are capped at 1 MB and 64 accounts.
+
+**Production mode** (`ZKCREDIT_ENV=production`) has these requirements:
+- It refuses to start unless `ZKCREDIT_ACCEPT_UNREVIEWED_CRYPTO=yes`. That flag says the operator knows the protocols have not been reviewed (see the note at the top), and the service logs the same warning on every start.
+- It needs the FIP's Ed25519 public key in `ZKCREDIT_FIP_PUBLIC_KEY`. It holds no FIP signing key, so `/underwrite/prove` is refused, as are the forged-proof demos (`allow_forged`).
+- It also needs hashed keys and a database.
+
+Settings, backups and incident steps are in [docs/runbook.md](docs/runbook.md).
 
 ## Limits
 
@@ -67,4 +78,21 @@ Set `ZKCREDIT_API_KEY` to require it in the `X-API-Key` header on the POST endpo
 - **Reserves are self-declared.** The solvency proof shows that committed reserves cover committed liabilities. Nothing ties the reserve commitment to real assets; that needs a custodian or auditor attestation.
 - **Liabilities can be left out.** As with any Merkle-sum proof of liabilities, a bank can omit customers. Only customers who check their inclusion proofs would notice. The bundle also reveals the customer count.
 - **The demo server sees raw figures.** `/underwrite/prove` and `/solvency/audit` take the private inputs, which is fine for a demo. In real use the prover runs on the borrower's device or inside the bank.
-- **No deployment story**: no TLS, rate limiting, key management, persistence or audit logging.
+- **Thin operations story.** Verifications and published proofs of solvency are stored, but there is no FIP key distribution or rotation protocol, and TLS is left to the ingress.
+
+## Production readiness
+
+**In place** (see [docs/runbook.md](docs/runbook.md) and [docs/threat-model.md](docs/threat-model.md)):
+- Pinned dependencies (`requirements.lock`), `pyproject.toml`, a container image that runs as a non-root user with a health check, and CI (ruff, bandit, pip-audit, tests with coverage).
+- Production mode that refuses to start without the explicit unreviewed-cryptography acknowledgement, the FIP's public key, hashed per-client API keys and a database. It holds no signing key and disables the demo prover and forged-proof demos.
+- Roles on keys, per-client rate limits, a body cap, security headers, CORS only for listed origins, and errors that don't echo input.
+- Recorded credit verifications and published proofs of solvency in SQLite or Postgres, with numbered migrations.
+- JSON logs with request IDs, `/healthz`, `/readyz`, and Prometheus metrics for verified and rejected proofs.
+
+**Still needed before any real use**, none of which code can supply:
+- **A cryptographer's review** of the commitment scheme, range proofs, Fiat-Shamir transcripts and Merkle-sum tree, or a move to audited libraries (Bulletproofs, Ristretto255). This is the first requirement, ahead of everything below.
+- An independent security review and penetration test.
+- Validation on real Account Aggregator data. Every profile here is hand-written.
+- RBI sign-off (Account Aggregator framework, digital lending directions) and DPDP Act 2023 consent handling.
+- Real integrations: the Account Aggregator / ReBIT flows with FIP key distribution, the lender's loan origination system, and a custodian or auditor attestation for reserves.
+- The FIP's signing keys in an HSM, and an on-call team with SLOs.
