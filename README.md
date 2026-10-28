@@ -78,3 +78,7 @@ A credit proof takes about 0.35 s to create and 0.75 s to verify, and is 80 KB i
 - The demo endpoints receive the private figures; in real use the prover would run on the borrower's device or inside the bank.
 
 See [SECURITY.md](SECURITY.md) and [docs/threat-model.md](docs/threat-model.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
