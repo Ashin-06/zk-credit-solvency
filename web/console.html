@@ -548,9 +548,9 @@
         fetch("/params").then(r => r.json()),
         fetch("/presets").then(r => r.json())
       ]);
-      document.getElementById("pInfo").innerHTML = `<strong>q (${healthRes.group.subgroup_bits}b):</strong> ${healthRes.group.q.slice(0, 22)}...`;
-      document.getElementById("gInfo").innerHTML = `<strong>g:</strong> ${healthRes.group.g.slice(0, 18)}...`;
-      document.getElementById("hInfo").innerHTML = `<strong>h (NUMS):</strong> ${healthRes.group.h.slice(0, 18)}...`;
+      document.getElementById("pInfo").innerHTML = `<strong>q (${esc(healthRes.group.subgroup_bits)}b):</strong> ${esc(healthRes.group.q.slice(0, 22))}...`;
+      document.getElementById("gInfo").innerHTML = `<strong>g:</strong> ${esc(healthRes.group.g.slice(0, 18))}...`;
+      document.getElementById("hInfo").innerHTML = `<strong>h (NUMS):</strong> ${esc(healthRes.group.h.slice(0, 18))}...`;
 
       PRESETS = presetsRes;
       const bSel = document.getElementById("borrowerPreset");
